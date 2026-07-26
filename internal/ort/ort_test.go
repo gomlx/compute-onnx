@@ -122,10 +122,7 @@ func TestBasicInference(t *testing.T) {
 		t.Fatalf("Run failed: %v", err)
 	}
 
-	outputSlice, err := outputTensor.GetData()
-	if err != nil {
-		t.Fatalf("GetData failed: %v", err)
-	}
+	outputSlice := outputTensor.GetData()
 
 	for i, v := range outputSlice {
 		if v != inputData[i] {

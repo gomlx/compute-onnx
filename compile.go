@@ -15,7 +15,6 @@ import (
 	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/klog/v2"
-	"strings"
 )
 
 func shapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
@@ -227,7 +226,7 @@ func (b *Builder) Compile() (compute.Executable, error) {
 	}
 
 	var options *ort.SessionOptions
-	if strings.Contains(b.backend.config, "cuda") {
+	if b.backend.cuda || b.backend.logSeverity >= 0 {
 		var err error
 		options, err = ort.NewSessionOptions()
 		if err != nil {
@@ -235,15 +234,24 @@ func (b *Builder) Compile() (compute.Executable, error) {
 		}
 		defer options.Destroy()
 
-		cudaOpts, err := ort.NewCUDAProviderOptions()
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create ONNX Runtime CUDAProviderOptions")
-		}
-		defer cudaOpts.Destroy()
+		if b.backend.cuda {
+			cudaOpts, err := ort.NewCUDAProviderOptions()
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to create ONNX Runtime CUDAProviderOptions")
+			}
+			defer cudaOpts.Destroy()
 
-		err = options.AppendExecutionProviderCUDA(cudaOpts)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to append CUDA execution provider to SessionOptions")
+			err = options.AppendExecutionProviderCUDA(cudaOpts)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to append CUDA execution provider to SessionOptions")
+			}
+		}
+
+		if b.backend.logSeverity >= 0 {
+			err = options.SetSessionLogSeverityLevel(b.backend.logSeverity)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to set ONNX Runtime session log severity level")
+			}
 		}
 	}
 

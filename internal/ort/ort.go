@@ -47,6 +47,7 @@ OrtStatus* wrapper_GetTensorElementType(const OrtApi* api, const OrtTensorTypeAn
 OrtStatus* wrapper_GetDimensionsCount(const OrtApi* api, const OrtTensorTypeAndShapeInfo* info, size_t* out);
 OrtStatus* wrapper_GetDimensions(const OrtApi* api, const OrtTensorTypeAndShapeInfo* info, int64_t* dim_values, size_t dim_values_length);
 void wrapper_ReleaseTensorTypeAndShapeInfo(const OrtApi* api, OrtTensorTypeAndShapeInfo* info);
+OrtStatus* wrapper_SetSessionLogSeverityLevel(const OrtApi* api, OrtSessionOptions* options, int session_log_severity_level);
 */
 import "C"
 import (
@@ -159,6 +160,11 @@ func (so *SessionOptions) Destroy() error {
 
 func (so *SessionOptions) AppendExecutionProviderCUDA(cudaOpts *CUDAProviderOptions) error {
 	status := C.wrapper_SessionOptionsAppendExecutionProvider_CUDA_V2(ortApi, so.options, cudaOpts.cudaOpts)
+	return statusToError(status)
+}
+
+func (so *SessionOptions) SetSessionLogSeverityLevel(level int) error {
+	status := C.wrapper_SetSessionLogSeverityLevel(ortApi, so.options, C.int(level))
 	return statusToError(status)
 }
 

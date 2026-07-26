@@ -123,3 +123,7 @@ OrtStatus* wrapper_GetDimensions(const OrtApi* api, const OrtTensorTypeAndShapeI
 void wrapper_ReleaseTensorTypeAndShapeInfo(const OrtApi* api, OrtTensorTypeAndShapeInfo* info) {
     api->ReleaseTensorTypeAndShapeInfo(info);
 }
+
+OrtStatus* wrapper_SetSessionLogSeverityLevel(const OrtApi* api, OrtSessionOptions* options, int session_log_severity_level) {
+    return api->SetSessionLogSeverityLevel(options, session_log_severity_level);
+}

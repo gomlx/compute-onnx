@@ -3,11 +3,11 @@
 package onnxruntime
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
-
 	"strings"
+	"sync"
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/support/onnxruntime"
@@ -101,6 +101,7 @@ func initializeORT(cuda bool) error {
 type Backend struct {
 	config       string
 	cuda         bool
+	logSeverity  int
 	capabilities compute.Capabilities
 	isFinalized  bool
 }
@@ -117,18 +118,67 @@ func init() {
 	}
 }
 
-func New(config string) (compute.Backend, error) {
-	configLower := strings.ToLower(config)
-	cuda := false
-	if configLower == "cuda" || configLower == "gpu" {
-		cuda = true
-	} else if configLower == "cpu" {
-		cuda = false
-	} else if configLower == "" {
-		// Auto-decide based on GPU hardware presence
+func parseConfig(config string) (cuda bool, logSeverity int, err error) {
+	cuda = false
+	hasProvider := false
+	logSeverity = -1 // not set
+
+	if config == "" {
+		return HasNvidiaGPU(), -1, nil
+	}
+
+	parts := strings.Split(config, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "=") {
+			kv := strings.SplitN(part, "=", 2)
+			key := strings.ToLower(strings.TrimSpace(kv[0]))
+			val := strings.TrimSpace(kv[1])
+			if key == "log" {
+				var level int
+				if _, err := fmt.Sscanf(val, "%d", &level); err != nil {
+					return false, 0, errors.Errorf("invalid log level: %q", val)
+				}
+				// Map level to ORT severity (higher level = more verbose):
+				// level=0 -> severity=3 (ERROR)
+				// level=1 -> severity=2 (WARNING)
+				// level=2 -> severity=1 (INFO)
+				// level>=3 -> severity=0 (VERBOSE)
+				severity := 3 - level
+				if severity < 0 {
+					severity = 0
+				}
+				logSeverity = severity
+			} else {
+				return false, 0, errors.Errorf("unknown config option: %q", key)
+			}
+		} else {
+			partLower := strings.ToLower(part)
+			if partLower == "cuda" || partLower == "gpu" {
+				cuda = true
+				hasProvider = true
+			} else if partLower == "cpu" {
+				cuda = false
+				hasProvider = true
+			} else {
+				return false, 0, errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"gpu\", or key=value option", part)
+			}
+		}
+	}
+
+	if !hasProvider {
 		cuda = HasNvidiaGPU()
-	} else {
-		return nil, errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"gpu\", or \"\"", config)
+	}
+	return cuda, logSeverity, nil
+}
+
+func New(config string) (compute.Backend, error) {
+	cuda, logSeverity, err := parseConfig(config)
+	if err != nil {
+		return nil, err
 	}
 
 	if cuda {
@@ -138,13 +188,14 @@ func New(config string) (compute.Backend, error) {
 		}
 	}
 
-	err := initializeORT(cuda)
+	err = initializeORT(cuda)
 	if err != nil {
 		return nil, err
 	}
 	return &Backend{
-		config: config,
-		cuda:   cuda,
+		config:      config,
+		cuda:        cuda,
+		logSeverity: logSeverity,
 	}, nil
 }
 
