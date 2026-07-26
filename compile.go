@@ -14,6 +14,7 @@ import (
 	"github.com/pkg/errors"
 	ort "github.com/yalue/onnxruntime_go"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/klog/v2"
 )
 
 func shapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
@@ -105,6 +106,12 @@ func constantToTensorProto(name string, shape shapes.Shape, flat any) *onnx.Tens
 
 func (b *Builder) Compile() (compute.Executable, error) {
 	mainFn := b.mainFn
+	if klog.V(2).Enabled() {
+		klog.Infof("COMPILE: builder=%q, mainFn=%q, num_params=%d", b.name, mainFn.name, len(mainFn.params))
+		for i, p := range mainFn.params {
+			klog.Infof("  param[%d]: name=%s shape=%s", i, p.name, p.shape)
+		}
+	}
 
 	// Create inputs list for ONNX graph
 	inputs := make([]*onnx.ValueInfoProto, 0, len(mainFn.params))

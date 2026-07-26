@@ -20,6 +20,13 @@ func init() {
 	registerOp(compute.OpTypeMin)
 	registerOp(compute.OpTypePow)
 
+	// Bitwise & Shift
+	registerOp(compute.OpTypeBitwiseAnd)
+	registerOp(compute.OpTypeBitwiseOr)
+	registerOp(compute.OpTypeBitwiseXor)
+	registerOp(compute.OpTypeShiftLeft)
+	registerOp(compute.OpTypeShiftRightLogical)
+
 	// Comparisons
 	registerOp(compute.OpTypeEqual)
 	registerOp(compute.OpTypeNotEqual)
@@ -42,6 +49,8 @@ func init() {
 	registerOp(compute.OpTypeTanh)
 	registerOp(compute.OpTypeLogistic)
 	registerOp(compute.OpTypeErf)
+	registerOp(compute.OpTypeSign)
+	registerOp(compute.OpTypeLog1p)
 
 	// Logical
 	registerOp(compute.OpTypeLogicalAnd)
@@ -71,6 +80,17 @@ func init() {
 	registerOp(compute.OpTypeReduceLogicalAnd)
 	registerOp(compute.OpTypeReduceLogicalOr)
 	registerOp(compute.OpTypeReduceLogicalXor)
+
+	// DotGeneral
+	registerOp(compute.OpTypeDotGeneral)
+
+	// Scatter
+	registerOp(compute.OpTypeScatterSum)
+	registerOp(compute.OpTypeScatterMax)
+	registerOp(compute.OpTypeScatterMin)
+
+	// RNG
+	registerOp(compute.OpTypeRNGBitGenerator)
 }
 
 func (f *Function) addBinaryOp(opType compute.OpType, onnxOpType string, lhs, rhs compute.Value) (compute.Value, error) {

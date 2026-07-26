@@ -35,7 +35,15 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 		reduceInput = xNode
 	}
 
-	outShape, err := shapeinference.Reduce(reduceInput.shape, axes)
+	axesToUse := axes
+	if len(axesToUse) == 0 {
+		axesToUse = make([]int, reduceInput.shape.Rank())
+		for i := 0; i < reduceInput.shape.Rank(); i++ {
+			axesToUse[i] = i
+		}
+	}
+
+	outShape, err := shapeinference.Reduce(reduceInput.shape, axesToUse)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +52,7 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 		outShape.Dimensions = make([]int, reduceInput.shape.Rank())
 		for axis, dim := range reduceInput.shape.Dimensions {
 			reduced := false
-			for _, a := range axes {
+			for _, a := range axesToUse {
 				if a == axis {
 					reduced = true
 					break
@@ -76,11 +84,11 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 		return nil, errors.Errorf("unsupported reduction operation %s", opType)
 	}
 
-	axes64 := make([]int64, len(axes))
-	for i, a := range axes {
+	axes64 := make([]int64, len(axesToUse))
+	for i, a := range axesToUse {
 		axes64[i] = int64(a)
 	}
-	axesConst, err := f.Constant(axes64, len(axes))
+	axesConst, err := f.Constant(axes64, len(axesToUse))
 	if err != nil {
 		return nil, err
 	}
