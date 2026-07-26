@@ -6,7 +6,7 @@ import (
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
-	ort "github.com/yalue/onnxruntime_go"
+	ort "github.com/gomlx/compute-onnx/internal/ort"
 )
 
 type Executable struct {

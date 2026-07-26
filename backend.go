@@ -14,7 +14,7 @@ import (
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
-	ort "github.com/yalue/onnxruntime_go"
+	ort "github.com/gomlx/compute-onnx/internal/ort"
 )
 
 const (
