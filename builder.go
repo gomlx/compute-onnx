@@ -31,6 +31,11 @@ var _ compute.Builder = (*Builder)(nil)
 
 func NewBuilder(name string, backend *Backend) *Builder {
 	b := &Builder{
+		Builder: notimplemented.Builder{
+			ErrFn: func(op compute.OpType) error {
+				return errors.Errorf("%s not implemented for ONNX Runtime backend", op)
+			},
+		},
 		name:    name,
 		backend: backend,
 		funcs:   make(map[string]*Function),
