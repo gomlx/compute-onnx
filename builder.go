@@ -33,7 +33,7 @@ func NewBuilder(name string, backend *Backend) *Builder {
 	b := &Builder{
 		Builder: notimplemented.Builder{
 			ErrFn: func(op compute.OpType) error {
-				return errors.Errorf("%s not implemented for ONNX Runtime backend", op)
+				return errors.Wrapf(compute.ErrNotImplemented, "%s not implemented for ONNX Runtime backend", op)
 			},
 		},
 		name:    name,
