@@ -15,6 +15,7 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/klog/v2"
+	"strings"
 )
 
 func shapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
@@ -225,7 +226,28 @@ func (b *Builder) Compile() (compute.Executable, error) {
 		return nil, errors.Wrap(err, "failed to marshal ONNX ModelProto")
 	}
 
-	session, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inputNames, outputNames, nil)
+	var options *ort.SessionOptions
+	if strings.Contains(b.backend.config, "cuda") {
+		var err error
+		options, err = ort.NewSessionOptions()
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create ONNX Runtime SessionOptions")
+		}
+		defer options.Destroy()
+
+		cudaOpts, err := ort.NewCUDAProviderOptions()
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create ONNX Runtime CUDAProviderOptions")
+		}
+		defer cudaOpts.Destroy()
+
+		err = options.AppendExecutionProviderCUDA(cudaOpts)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to append CUDA execution provider to SessionOptions")
+		}
+	}
+
+	session, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inputNames, outputNames, options)
 	if err != nil {
 		_ = os.WriteFile("failed_model.onnx", modelBytes, 0644)
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime session")

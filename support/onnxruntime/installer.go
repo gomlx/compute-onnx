@@ -163,7 +163,11 @@ func GetLatestVersion() (string, error) {
 // It returns the absolute path to the main shared library file.
 func Install(version string, cuda bool, force bool) (string, error) {
 	if version == "" {
-		version = DefaultVersion
+		if cuda {
+			version = "1.26.0"
+		} else {
+			version = DefaultVersion
+		}
 	}
 	if version == "" {
 		var err error
@@ -186,7 +190,13 @@ func Install(version string, cuda bool, force bool) (string, error) {
 	targetPath := filepath.Join(installDir, libFilename)
 	if !force {
 		if _, err := os.Stat(targetPath); err == nil {
-			return targetPath, nil
+			if !cuda {
+				return targetPath, nil
+			}
+			cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
+			if _, err := os.Stat(cudaLibPath); err == nil {
+				return targetPath, nil
+			}
 		}
 	}
 

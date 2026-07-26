@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	"strings"
+
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/support/onnxruntime"
 	"github.com/gomlx/compute/dtypes"
@@ -24,7 +26,11 @@ var (
 	isOrtInitialized  bool
 	supportedOps      = make(map[compute.OpType]bool)
 	supportedOpsMutex sync.RWMutex
+
+	autoInstall = true
 )
+
+const NoAutoInstallEnv = "GOMLX_NO_AUTO_INSTALL"
 
 func registerOp(op compute.OpType) {
 	supportedOpsMutex.Lock()
@@ -42,7 +48,7 @@ func getSupportedOps() map[compute.OpType]bool {
 	return ops
 }
 
-func initializeORT() error {
+func initializeORT(cuda bool) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if isOrtInitialized {
@@ -57,15 +63,27 @@ func initializeORT() error {
 			if err == nil {
 				targetPath := filepath.Join(installDir, libFilename)
 				if _, err := os.Stat(targetPath); err == nil {
-					path = targetPath
+					useInstalled := true
+					if cuda {
+						cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
+						if _, err := os.Stat(cudaLibPath); err != nil {
+							useInstalled = false
+						}
+					}
+					if useInstalled {
+						path = targetPath
+					}
 				}
 			}
 		}
 	}
 
 	if path == "" {
+		if !autoInstall {
+			return errors.Errorf("ONNX Runtime library not found at ONNXRUNTIME_SHARED_LIBRARY_PATH and auto-installation is disabled via %s", NoAutoInstallEnv)
+		}
 		var err error
-		path, err = onnxruntime.Install(onnxruntime.DefaultVersion, false, false)
+		path, err = onnxruntime.Install(onnxruntime.DefaultVersion, cuda, false)
 		if err != nil {
 			return errors.Wrap(err, "failed to automatically install ONNX Runtime library")
 		}
@@ -82,6 +100,7 @@ func initializeORT() error {
 
 type Backend struct {
 	config       string
+	cuda         bool
 	capabilities compute.Capabilities
 	isFinalized  bool
 }
@@ -92,15 +111,40 @@ var _ compute.DataInterface = (*Backend)(nil)
 func init() {
 	compute.Register(BackendName, New)
 	compute.Register("onnx", New)
+
+	if _, found := os.LookupEnv(NoAutoInstallEnv); found {
+		autoInstall = false
+	}
 }
 
 func New(config string) (compute.Backend, error) {
-	err := initializeORT()
+	configLower := strings.ToLower(config)
+	cuda := false
+	if configLower == "cuda" || configLower == "gpu" {
+		cuda = true
+	} else if configLower == "cpu" {
+		cuda = false
+	} else if configLower == "" {
+		// Auto-decide based on GPU hardware presence
+		cuda = HasNvidiaGPU()
+	} else {
+		return nil, errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"gpu\", or \"\"", config)
+	}
+
+	if cuda {
+		// Verify CUDA and cuDNN are installed on the system
+		if err := checkCUDAAndCUDNN(); err != nil {
+			return nil, err
+		}
+	}
+
+	err := initializeORT(cuda)
 	if err != nil {
 		return nil, err
 	}
 	return &Backend{
 		config: config,
+		cuda:   cuda,
 	}, nil
 }
 
@@ -113,7 +157,10 @@ func (b *Backend) String() string {
 }
 
 func (b *Backend) Description() string {
-	return "ONNX Runtime compute backend for GoMLX"
+	if b.cuda {
+		return "ONNX Runtime (CUDA GPU) compute backend for GoMLX"
+	}
+	return "ONNX Runtime (CPU) compute backend for GoMLX"
 }
 
 func (b *Backend) NumDevices() int {
@@ -121,6 +168,9 @@ func (b *Backend) NumDevices() int {
 }
 
 func (b *Backend) DeviceDescription(deviceNum compute.DeviceNum) string {
+	if b.cuda {
+		return "CUDA GPU (ONNX Runtime Default Device)"
+	}
 	return "CPU (ONNX Runtime Default Device)"
 }
 
