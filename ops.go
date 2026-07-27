@@ -80,9 +80,11 @@ func init() {
 	registerOp(compute.OpTypeReduceLogicalAnd)
 	registerOp(compute.OpTypeReduceLogicalOr)
 	registerOp(compute.OpTypeReduceLogicalXor)
+	registerOp(compute.OpTypeArgMinMax)
 
-	// DotGeneral
+	// DotGeneral / ConvGeneral
 	registerOp(compute.OpTypeDotGeneral)
+	registerOp(compute.OpTypeConvGeneral)
 
 	// Scatter
 	registerOp(compute.OpTypeScatterSum)

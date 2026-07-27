@@ -320,3 +320,53 @@ func (f *Function) ReduceLogicalOr(x compute.Value, axes ...int) (compute.Value,
 func (f *Function) ReduceLogicalXor(x compute.Value, axes ...int) (compute.Value, error) {
 	return f.ReduceLogical(x, compute.OpTypeReduceLogicalXor, axes, false)
 }
+
+func (f *Function) ArgMinMax(x compute.Value, axis int, outputDType dtypes.DType, isMin bool) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("input must be a valid onnxruntime node")
+	}
+
+	outShape, err := shapeinference.ArgMinMax(xNode.shape, axis, outputDType)
+	if err != nil {
+		return nil, err
+	}
+
+	ortOpType := "ArgMax"
+	if isMin {
+		ortOpType = "ArgMin"
+	}
+
+	f.nodeCount++
+	argMinMaxNode := &Node{
+		name:   fmt.Sprintf("node_%d", f.nodeCount),
+		opType: ortOpType,
+		inputs: []*Node{xNode},
+		shape:  outShape,
+		attributes: []*onnx.AttributeProto{
+			{
+				Name: "axis",
+				Type: onnx.AttributeProto_INT,
+				I:    int64(axis),
+			},
+			{
+				Name: "keepdims",
+				Type: onnx.AttributeProto_INT,
+				I:    0,
+			},
+			{
+				Name: "select_last_index",
+				Type: onnx.AttributeProto_INT,
+				I:    0,
+			},
+		},
+	}
+	f.nodes = append(f.nodes, argMinMaxNode)
+
+	// ONNX ArgMin/ArgMax produces INT64 output. Convert to outputDType if needed.
+	if outputDType != dtypes.Int64 {
+		return f.ConvertDType(argMinMaxNode, outputDType)
+	}
+
+	return argMinMaxNode, nil
+}
