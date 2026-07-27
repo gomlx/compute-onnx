@@ -81,6 +81,7 @@ func init() {
 	registerOp(compute.OpTypeReduceLogicalOr)
 	registerOp(compute.OpTypeReduceLogicalXor)
 	registerOp(compute.OpTypeArgMinMax)
+	registerOp(compute.OpTypeReduceWindow)
 
 	// DotGeneral / ConvGeneral
 	registerOp(compute.OpTypeDotGeneral)
