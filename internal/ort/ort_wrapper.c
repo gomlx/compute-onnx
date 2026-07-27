@@ -127,3 +127,75 @@ void wrapper_ReleaseTensorTypeAndShapeInfo(const OrtApi* api, OrtTensorTypeAndSh
 OrtStatus* wrapper_SetSessionLogSeverityLevel(const OrtApi* api, OrtSessionOptions* options, int session_log_severity_level) {
     return api->SetSessionLogSeverityLevel(options, session_log_severity_level);
 }
+
+// --- IoBinding wrappers ---
+
+OrtStatus* wrapper_CreateIoBinding(const OrtApi* api, OrtSession* session, OrtIoBinding** out) {
+    return api->CreateIoBinding(session, out);
+}
+
+void wrapper_ReleaseIoBinding(const OrtApi* api, OrtIoBinding* binding) {
+    api->ReleaseIoBinding(binding);
+}
+
+OrtStatus* wrapper_BindInput(const OrtApi* api, OrtIoBinding* binding, const char* name, const OrtValue* val) {
+    return api->BindInput(binding, name, val);
+}
+
+OrtStatus* wrapper_BindOutput(const OrtApi* api, OrtIoBinding* binding, const char* name, const OrtValue* val) {
+    return api->BindOutput(binding, name, val);
+}
+
+OrtStatus* wrapper_BindOutputToDevice(const OrtApi* api, OrtIoBinding* binding, const char* name, const OrtMemoryInfo* mem_info) {
+    return api->BindOutputToDevice(binding, name, mem_info);
+}
+
+OrtStatus* wrapper_RunWithBinding(const OrtApi* api, OrtSession* session, const OrtRunOptions* run_options, const OrtIoBinding* binding) {
+    return api->RunWithBinding(session, run_options, binding);
+}
+
+OrtStatus* wrapper_GetBoundOutputValues(const OrtApi* api, const OrtIoBinding* binding, OrtAllocator* allocator, OrtValue*** output, size_t* output_count) {
+    return api->GetBoundOutputValues(binding, allocator, output, output_count);
+}
+
+void wrapper_ClearBoundInputs(const OrtApi* api, OrtIoBinding* binding) {
+    api->ClearBoundInputs(binding);
+}
+
+void wrapper_ClearBoundOutputs(const OrtApi* api, OrtIoBinding* binding) {
+    api->ClearBoundOutputs(binding);
+}
+
+OrtStatus* wrapper_SynchronizeBoundInputs(const OrtApi* api, OrtIoBinding* binding) {
+    return api->SynchronizeBoundInputs(binding);
+}
+
+OrtStatus* wrapper_SynchronizeBoundOutputs(const OrtApi* api, OrtIoBinding* binding) {
+    return api->SynchronizeBoundOutputs(binding);
+}
+
+// --- MemoryInfo ---
+
+OrtStatus* wrapper_CreateMemoryInfo(const OrtApi* api, const char* name, enum OrtAllocatorType type, int id, enum OrtMemType mem_type, OrtMemoryInfo** out) {
+    return api->CreateMemoryInfo(name, type, id, mem_type, out);
+}
+
+// --- Allocator from session ---
+
+OrtStatus* wrapper_CreateAllocator(const OrtApi* api, const OrtSession* session, const OrtMemoryInfo* mem_info, OrtAllocator** out) {
+    return api->CreateAllocator(session, mem_info, out);
+}
+
+void wrapper_ReleaseAllocator(const OrtApi* api, OrtAllocator* allocator) {
+    api->ReleaseAllocator(allocator);
+}
+
+// --- AllocatorAlloc / AllocatorFree for cudaMemcpy alternative ---
+
+OrtStatus* wrapper_AllocatorAlloc(const OrtApi* api, OrtAllocator* allocator, size_t size, void** out) {
+    return api->AllocatorAlloc(allocator, size, out);
+}
+
+OrtStatus* wrapper_AllocatorFree(const OrtApi* api, OrtAllocator* allocator, void* p) {
+    return api->AllocatorFree(allocator, p);
+}

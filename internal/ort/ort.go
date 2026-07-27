@@ -48,6 +48,26 @@ OrtStatus* wrapper_GetDimensionsCount(const OrtApi* api, const OrtTensorTypeAndS
 OrtStatus* wrapper_GetDimensions(const OrtApi* api, const OrtTensorTypeAndShapeInfo* info, int64_t* dim_values, size_t dim_values_length);
 void wrapper_ReleaseTensorTypeAndShapeInfo(const OrtApi* api, OrtTensorTypeAndShapeInfo* info);
 OrtStatus* wrapper_SetSessionLogSeverityLevel(const OrtApi* api, OrtSessionOptions* options, int session_log_severity_level);
+
+// IoBinding
+OrtStatus* wrapper_CreateIoBinding(const OrtApi* api, OrtSession* session, OrtIoBinding** out);
+void wrapper_ReleaseIoBinding(const OrtApi* api, OrtIoBinding* binding);
+OrtStatus* wrapper_BindInput(const OrtApi* api, OrtIoBinding* binding, const char* name, const OrtValue* val);
+OrtStatus* wrapper_BindOutput(const OrtApi* api, OrtIoBinding* binding, const char* name, const OrtValue* val);
+OrtStatus* wrapper_BindOutputToDevice(const OrtApi* api, OrtIoBinding* binding, const char* name, const OrtMemoryInfo* mem_info);
+OrtStatus* wrapper_RunWithBinding(const OrtApi* api, OrtSession* session, const OrtRunOptions* run_options, const OrtIoBinding* binding);
+OrtStatus* wrapper_GetBoundOutputValues(const OrtApi* api, const OrtIoBinding* binding, OrtAllocator* allocator, OrtValue*** output, size_t* output_count);
+void wrapper_ClearBoundInputs(const OrtApi* api, OrtIoBinding* binding);
+void wrapper_ClearBoundOutputs(const OrtApi* api, OrtIoBinding* binding);
+OrtStatus* wrapper_SynchronizeBoundInputs(const OrtApi* api, OrtIoBinding* binding);
+OrtStatus* wrapper_SynchronizeBoundOutputs(const OrtApi* api, OrtIoBinding* binding);
+
+// MemoryInfo + Allocator
+OrtStatus* wrapper_CreateMemoryInfo(const OrtApi* api, const char* name, enum OrtAllocatorType type, int id, enum OrtMemType mem_type, OrtMemoryInfo** out);
+OrtStatus* wrapper_CreateAllocator(const OrtApi* api, const OrtSession* session, const OrtMemoryInfo* mem_info, OrtAllocator** out);
+void wrapper_ReleaseAllocator(const OrtApi* api, OrtAllocator* allocator);
+OrtStatus* wrapper_AllocatorAlloc(const OrtApi* api, OrtAllocator* allocator, size_t size, void** out);
+OrtStatus* wrapper_AllocatorFree(const OrtApi* api, OrtAllocator* allocator, void* p);
 */
 import "C"
 import (
@@ -320,6 +340,38 @@ type Value interface {
 	cValue() *C.OrtValue
 }
 
+// RawValue wraps a raw *C.OrtValue, typically a GPU-resident tensor from IoBinding.
+type RawValue struct {
+	val *C.OrtValue
+}
+
+// WrapRawOrtValue creates a RawValue from a raw *C.OrtValue pointer.
+// The returned Value takes ownership and will release the OrtValue on Destroy().
+func WrapRawOrtValue(v *C.OrtValue) Value {
+	return &RawValue{val: v}
+}
+
+func (r *RawValue) GetTensorMutableData() (unsafe.Pointer, error) {
+	var out unsafe.Pointer
+	status := C.wrapper_GetTensorMutableData(ortApi, r.val, &out)
+	if err := statusToError(status); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *RawValue) Destroy() error {
+	if r.val != nil {
+		C.wrapper_ReleaseValue(ortApi, r.val)
+		r.val = nil
+	}
+	return nil
+}
+
+func (r *RawValue) cValue() *C.OrtValue {
+	return r.val
+}
+
 type Tensor[T TensorData] struct {
 	val   *C.OrtValue
 	shape Shape
@@ -351,7 +403,17 @@ func (t *Tensor[T]) GetData() []T {
 	for _, dim := range t.shape {
 		size *= int(dim)
 	}
+	if size == 0 {
+		return []T{}
+	}
+	if dataPtr == nil {
+		panic(fmt.Sprintf("GetData: dataPtr is nil but size is %d, shape is %v", size, t.shape))
+	}
 	return unsafe.Slice((*T)(dataPtr), size)
+}
+
+func (t *Tensor[T]) updateVal(newVal *C.OrtValue) {
+	t.val = newVal
 }
 
 func (t *Tensor[T]) Destroy() error {
@@ -489,8 +551,8 @@ func NewEmptyTensor[T TensorData](shape Shape) (*Tensor[T], error) {
 }
 
 func (s *Session) Run(inputNames []string, inputValues []Value, outputNames []string, outputValues []Value) error {
-	arena := NewArena(8192)
-	defer arena.Free()
+	arena := GetArena(8192)
+	defer ReturnArena(arena)
 
 	nInputs := len(inputNames)
 	nOutputs := len(outputNames)
@@ -535,9 +597,12 @@ func (s *Session) Run(inputNames []string, inputValues []Value, outputNames []st
 		return err
 	}
 
-	// Wrap any automatically-allocated outputs
+	// Wrap any automatically-allocated outputs or update overridden pre-allocated outputs
 	for i := 0; i < nOutputs; i++ {
 		if outputValues[i] != nil {
+			if t, ok := outputValues[i].(interface{ updateVal(*C.OrtValue) }); ok {
+				t.updateVal(outputValuesSlice[i])
+			}
 			continue
 		}
 		val, err := createGoValueFromOrtValue(outputValuesSlice[i])
@@ -553,6 +618,10 @@ type DynamicAdvancedSession struct {
 	session     *Session
 	inputNames  []string
 	outputNames []string
+
+	// Cached C-strings for input/output names, allocated once at session creation.
+	cInputNames  []*C.char
+	cOutputNames []*C.char
 }
 
 func NewDynamicAdvancedSessionWithONNXData(modelBytes []byte, inputNames []string, outputNames []string, options *SessionOptions) (*DynamicAdvancedSession, error) {
@@ -560,20 +629,122 @@ func NewDynamicAdvancedSessionWithONNXData(modelBytes []byte, inputNames []strin
 	if err != nil {
 		return nil, err
 	}
+
+	// Pre-allocate persistent C strings for input/output names.
+	cInputNames := make([]*C.char, len(inputNames))
+	for i, name := range inputNames {
+		cInputNames[i] = C.CString(name)
+	}
+	cOutputNames := make([]*C.char, len(outputNames))
+	for i, name := range outputNames {
+		cOutputNames[i] = C.CString(name)
+	}
+
 	return &DynamicAdvancedSession{
-		session:     session,
-		inputNames:  inputNames,
-		outputNames: outputNames,
+		session:      session,
+		inputNames:   inputNames,
+		outputNames:  outputNames,
+		cInputNames:  cInputNames,
+		cOutputNames: cOutputNames,
 	}, nil
 }
 
+// CreateIoBinding creates an IoBinding for this session.
+func (s *DynamicAdvancedSession) CreateIoBinding() (*IoBinding, error) {
+	return NewIoBinding(s.session)
+}
+
+// CInputNames returns the pre-allocated C-strings for input names.
+func (s *DynamicAdvancedSession) CInputNames() []*C.char {
+	return s.cInputNames
+}
+
+// COutputNames returns the pre-allocated C-strings for output names.
+func (s *DynamicAdvancedSession) COutputNames() []*C.char {
+	return s.cOutputNames
+}
+
 func (s *DynamicAdvancedSession) Destroy() error {
+	for _, cs := range s.cInputNames {
+		C.free(unsafe.Pointer(cs))
+	}
+	s.cInputNames = nil
+	for _, cs := range s.cOutputNames {
+		C.free(unsafe.Pointer(cs))
+	}
+	s.cOutputNames = nil
 	s.session.Destroy()
 	return nil
 }
 
 func (s *DynamicAdvancedSession) Run(inputs []Value, outputs []Value) error {
-	return s.session.Run(s.inputNames, inputs, s.outputNames, outputs)
+	nInputs := len(s.inputNames)
+	nOutputs := len(s.outputNames)
+
+	// Arena needs space for 4 pointer arrays: 2*(nInputs+nOutputs) pointers, each 8 bytes on 64-bit,
+	// plus alignment padding.
+	arenaSize := (nInputs + nOutputs) * 16
+	if arenaSize < 2048 {
+		arenaSize = 2048
+	}
+	arena := GetArena(arenaSize)
+	defer ReturnArena(arena)
+
+	inputNamesPtr := arena.AllocCharStarSlice(nInputs)
+	inputValuesPtr := arena.AllocOrtValueStarSlice(nInputs)
+	outputNamesPtr := arena.AllocCharStarSlice(nOutputs)
+	outputValuesPtr := arena.AllocOrtValueStarSlice(nOutputs)
+
+	inputNamesSlice := unsafe.Slice(inputNamesPtr, nInputs)
+	inputValuesSlice := unsafe.Slice(inputValuesPtr, nInputs)
+	outputNamesSlice := unsafe.Slice(outputNamesPtr, nOutputs)
+	outputValuesSlice := unsafe.Slice(outputValuesPtr, nOutputs)
+
+	for i := 0; i < nInputs; i++ {
+		inputNamesSlice[i] = s.cInputNames[i]
+		inputValuesSlice[i] = inputs[i].cValue()
+	}
+
+	for i := 0; i < nOutputs; i++ {
+		outputNamesSlice[i] = s.cOutputNames[i]
+		if outputs[i] != nil {
+			outputValuesSlice[i] = outputs[i].cValue()
+		} else {
+			outputValuesSlice[i] = nil
+		}
+	}
+
+	status := C.wrapper_Run(
+		ortApi,
+		s.session.session,
+		nil, // OrtRunOptions
+		inputNamesPtr,
+		inputValuesPtr,
+		C.size_t(nInputs),
+		outputNamesPtr,
+		C.size_t(nOutputs),
+		outputValuesPtr,
+	)
+
+	if err := statusToError(status); err != nil {
+		return err
+	}
+
+	// Wrap any automatically-allocated outputs or update overridden pre-allocated outputs
+	for i := 0; i < nOutputs; i++ {
+		if outputs[i] != nil {
+			if t, ok := outputs[i].(interface{ updateVal(*C.OrtValue) }); ok {
+				t.updateVal(outputValuesSlice[i])
+			}
+			continue
+		}
+		val, err := createGoValueFromOrtValue(outputValuesSlice[i])
+		if err != nil {
+			return err
+		}
+		outputs[i] = val
+	}
+	return nil
 }
 
 func createGoValueFromOrtValue(v *C.OrtValue) (Value, error) {
