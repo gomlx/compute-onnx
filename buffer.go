@@ -3,6 +3,8 @@
 package onnxruntime
 
 import (
+	"unsafe"
+
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
@@ -14,10 +16,12 @@ import (
 
 type ortTensorWrapper interface {
 	GetShape() ort.Shape
+	GetDType() dtypes.DType
 	Destroy() error
 	Value() ort.Value
 	ToFlatData(flat any) error
 	CopyFrom(flat any) error
+	GetData() any
 }
 
 type typedTensor[T ort.TensorData] struct {
@@ -26,6 +30,35 @@ type typedTensor[T ort.TensorData] struct {
 
 func (t *typedTensor[T]) GetShape() ort.Shape {
 	return t.tensor.GetShape()
+}
+
+func (t *typedTensor[T]) GetDType() dtypes.DType {
+	var dummy T
+	switch any(dummy).(type) {
+	case float32:
+		return dtypes.Float32
+	case float64:
+		return dtypes.Float64
+	case int32:
+		return dtypes.Int32
+	case int64:
+		return dtypes.Int64
+	case bool:
+		return dtypes.Bool
+	case int8:
+		return dtypes.Int8
+	case uint8:
+		return dtypes.Uint8
+	case int16:
+		return dtypes.Int16
+	case uint16:
+		return dtypes.Uint16
+	case uint32:
+		return dtypes.Uint32
+	case uint64:
+		return dtypes.Uint64
+	}
+	return dtypes.InvalidDType
 }
 
 func (t *typedTensor[T]) Destroy() error {
@@ -52,6 +85,10 @@ func (t *typedTensor[T]) CopyFrom(flat any) error {
 	}
 	copy(t.tensor.GetData(), slice)
 	return nil
+}
+
+func (t *typedTensor[T]) GetData() any {
+	return t.tensor.GetData()
 }
 
 // float16 and bfloat16 converters
@@ -92,6 +129,10 @@ func (t *float16Tensor) GetShape() ort.Shape {
 	return t.tensor.GetShape()
 }
 
+func (t *float16Tensor) GetDType() dtypes.DType {
+	return dtypes.Float16
+}
+
 func (t *float16Tensor) Destroy() error {
 	return t.tensor.Destroy()
 }
@@ -119,12 +160,23 @@ func (t *float16Tensor) CopyFrom(flat any) error {
 	return nil
 }
 
+func (t *float16Tensor) GetData() any {
+	f32 := t.tensor.GetData()
+	res := make([]float16.Float16, len(f32))
+	float32ToFloat16(f32, res)
+	return res
+}
+
 type bfloat16Tensor struct {
 	tensor *ort.Tensor[float32]
 }
 
 func (t *bfloat16Tensor) GetShape() ort.Shape {
 	return t.tensor.GetShape()
+}
+
+func (t *bfloat16Tensor) GetDType() dtypes.DType {
+	return dtypes.BFloat16
 }
 
 func (t *bfloat16Tensor) Destroy() error {
@@ -152,6 +204,13 @@ func (t *bfloat16Tensor) CopyFrom(flat any) error {
 	f32 := bfloat16ToFloat32(slice)
 	copy(t.tensor.GetData(), f32)
 	return nil
+}
+
+func (t *bfloat16Tensor) GetData() any {
+	f32 := t.tensor.GetData()
+	res := make([]bfloat16.BFloat16, len(f32))
+	float32ToBFloat16(f32, res)
+	return res
 }
 
 func toInt64s(dims []int) []int64 {
@@ -339,12 +398,101 @@ func newEmptyOrtTensorWrapper(shape shapes.Shape) (ortTensorWrapper, error) {
 	}
 }
 
+// gpuTensorWrapper wraps a raw GPU OrtValue. It implements ortTensorWrapper but
+// ToFlatData/CopyFrom/GetData use GPU↔Host copies instead of direct memory access.
+type gpuTensorWrapper struct {
+	val   ort.Value // GPU-resident OrtValue (via createGoValueFromOrtValue)
+	shape ort.Shape
+	dtype dtypes.DType
+}
+
+func (g *gpuTensorWrapper) GetShape() ort.Shape    { return g.shape }
+func (g *gpuTensorWrapper) GetDType() dtypes.DType { return g.dtype }
+func (g *gpuTensorWrapper) Value() ort.Value       { return g.val }
+
+func (g *gpuTensorWrapper) Destroy() error {
+	if g.val != nil {
+		err := g.val.Destroy()
+		g.val = nil
+		return err
+	}
+	return nil
+}
+
+func (g *gpuTensorWrapper) ToFlatData(flat any) error {
+	if g.size() == 0 {
+		return nil // nothing to copy for zero-size tensors
+	}
+	// For float16/bfloat16, ORT stores them as float32 internally.
+	switch f := flat.(type) {
+	case []float16.Float16:
+		f32 := make([]float32, len(f))
+		err := ort.CopyGPUToHost(g.val, unsafe.Pointer(&f32[0]), len(f32)*4)
+		if err != nil {
+			return err
+		}
+		float32ToFloat16(f32, f)
+		return nil
+	case []bfloat16.BFloat16:
+		f32 := make([]float32, len(f))
+		err := ort.CopyGPUToHost(g.val, unsafe.Pointer(&f32[0]), len(f32)*4)
+		if err != nil {
+			return err
+		}
+		float32ToBFloat16(f32, f)
+		return nil
+	case []float32:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*4)
+	case []float64:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*8)
+	case []int32:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*4)
+	case []int64:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*8)
+	case []bool:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*1)
+	case []int8:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*1)
+	case []uint8:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*1)
+	case []int16:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*2)
+	case []uint16:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*2)
+	case []uint32:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*4)
+	case []uint64:
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*8)
+	default:
+		return errors.Errorf("unsupported slice type %T for GPU ToFlatData", flat)
+	}
+}
+
+func (g *gpuTensorWrapper) CopyFrom(flat any) error {
+	return errors.New("CopyFrom not supported for GPU buffers")
+}
+
+func (g *gpuTensorWrapper) GetData() any {
+	return nil // GPU data not directly accessible from Go.
+}
+
+func (g *gpuTensorWrapper) size() int {
+	s := 1
+	for _, d := range g.shape {
+		s *= int(d)
+	}
+	return s
+}
+
 // Buffer implements compute.Buffer for ONNX Runtime.
 type Buffer struct {
-	backend *Backend
-	wrapper ortTensorWrapper
-	shape   shapes.Shape
-	device  compute.DeviceNum
+	backend    *Backend
+	wrapper    ortTensorWrapper
+	shape      shapes.Shape
+	device     compute.DeviceNum
+	isShared   bool
+	isCUDA     bool        // true if wrapper holds a GPU-resident OrtValue
+	executable *Executable // back-pointer for recycling wrapper on Finalize; may be nil
 }
 
 var _ compute.Buffer = (*Buffer)(nil)
@@ -355,10 +503,15 @@ func (b *Buffer) Backend() compute.Backend {
 
 func (b *Buffer) Finalize() error {
 	if b.wrapper != nil {
-		err := b.wrapper.Destroy()
+		w := b.wrapper
 		b.wrapper = nil
-		if err != nil {
-			return errors.Wrap(err, "failed to destroy onnxruntime tensor")
+		// Try to recycle the wrapper back to the executable's pool.
+		if b.executable != nil {
+			b.executable.recycleWrapper(w)
+		} else {
+			if err := w.Destroy(); err != nil {
+				return errors.Wrap(err, "failed to destroy onnxruntime tensor")
+			}
 		}
 	}
 	return nil
@@ -376,11 +529,22 @@ func (b *Buffer) ToFlatData(flat any) error {
 	if b.wrapper == nil {
 		return errors.New("cannot read from finalized buffer")
 	}
+	// Both CPU and CUDA paths go through the wrapper's ToFlatData.
+	// For CPU, this is a memcpy. For GPU (gpuTensorWrapper), it does cudaMemcpy D2H.
 	return b.wrapper.ToFlatData(flat)
 }
 
 func (b *Buffer) Data() (flat any, err error) {
-	return nil, errors.New("shared buffers not supported")
+	if b.isCUDA {
+		return nil, errors.New("direct data access not supported for GPU buffers; use ToFlatData")
+	}
+	if !b.isShared {
+		return nil, errors.New("shared buffers not supported")
+	}
+	if b.wrapper == nil {
+		return nil, errors.New("cannot read from finalized buffer")
+	}
+	return b.wrapper.GetData(), nil
 }
 
 func (b *Buffer) CopyToDevice(deviceNum compute.DeviceNum) (compute.Buffer, error) {
@@ -403,10 +567,11 @@ func (b *Buffer) CopyToDevice(deviceNum compute.DeviceNum) (compute.Buffer, erro
 		return nil, err
 	}
 	return &Buffer{
-		backend: b.backend,
-		wrapper: newWrapper,
-		shape:   b.shape,
-		device:  deviceNum,
+		backend:  b.backend,
+		wrapper:  newWrapper,
+		shape:    b.shape,
+		device:   deviceNum,
+		isShared: true,
 	}, nil
 }
 

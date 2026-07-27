@@ -261,12 +261,5 @@ func (b *Builder) Compile() (compute.Executable, error) {
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime session")
 	}
 
-	return &Executable{
-		backend:      b.backend,
-		session:      session,
-		inputNames:   inputNames,
-		inputShapes:  inputShapes,
-		outputNames:  outputNames,
-		outputShapes: outputShapes,
-	}, nil
+	return newExecutable(b.backend, session, inputNames, inputShapes, outputNames, outputShapes), nil
 }

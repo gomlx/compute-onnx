@@ -256,19 +256,113 @@ func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shap
 		return nil, err
 	}
 	return &Buffer{
-		backend: b,
-		wrapper: wrapper,
-		shape:   shape,
-		device:  deviceNum,
+		backend:  b,
+		wrapper:  wrapper,
+		shape:    shape,
+		device:   deviceNum,
+		isShared: true,
 	}, nil
 }
 
 func (b *Backend) HasSharedBuffers() bool {
-	return false
+	return !b.cuda
 }
 
 func (b *Backend) NewSharedBuffer(deviceNum compute.DeviceNum, shape shapes.Shape) (compute.Buffer, any, error) {
-	return nil, nil, errors.Wrap(compute.ErrNotImplemented, "NewSharedBuffer not implemented")
+	ortShape := ort.NewShape(toInt64s(shape.Dimensions)...)
+	var wrapper ortTensorWrapper
+	var flat any
+
+	switch shape.DType {
+	case dtypes.Float32:
+		t, err := ort.NewEmptyTensor[float32](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[float32]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Float64:
+		t, err := ort.NewEmptyTensor[float64](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[float64]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Int32:
+		t, err := ort.NewEmptyTensor[int32](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[int32]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Int64:
+		t, err := ort.NewEmptyTensor[int64](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[int64]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Bool:
+		t, err := ort.NewEmptyTensor[bool](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[bool]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Int8:
+		t, err := ort.NewEmptyTensor[int8](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[int8]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Uint8:
+		t, err := ort.NewEmptyTensor[uint8](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[uint8]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Int16:
+		t, err := ort.NewEmptyTensor[int16](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[int16]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Uint16:
+		t, err := ort.NewEmptyTensor[uint16](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[uint16]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Uint32:
+		t, err := ort.NewEmptyTensor[uint32](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[uint32]{tensor: t}
+		flat = t.GetData()
+	case dtypes.Uint64:
+		t, err := ort.NewEmptyTensor[uint64](ortShape)
+		if err != nil {
+			return nil, nil, err
+		}
+		wrapper = &typedTensor[uint64]{tensor: t}
+		flat = t.GetData()
+	default:
+		return nil, nil, errors.Errorf("shared buffers not implemented for dtype %s", shape.DType)
+	}
+
+	buf := &Buffer{
+		backend:  b,
+		wrapper:  wrapper,
+		shape:    shape,
+		device:   deviceNum,
+		isShared: true,
+	}
+	return buf, flat, nil
 }
 
 func (b *Backend) Finalize() {
