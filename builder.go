@@ -11,12 +11,14 @@ import (
 )
 
 type Node struct {
-	name       string
-	opType     string
-	inputs     []*Node
-	shape      shapes.Shape
-	flatValue  any // used if opType == "Constant"
-	attributes []*onnx.AttributeProto
+	name        string
+	opType      string
+	domain      string
+	inputs      []*Node
+	outputNames []string
+	shape       shapes.Shape
+	flatValue   any // used if opType == "Constant"
+	attributes  []*onnx.AttributeProto
 }
 
 type Builder struct {
@@ -33,7 +35,7 @@ func NewBuilder(name string, backend *Backend) *Builder {
 	b := &Builder{
 		Builder: notimplemented.Builder{
 			ErrFn: func(op compute.OpType) error {
-				return errors.Wrapf(compute.ErrNotImplemented, "%s not implemented for ONNX Runtime backend", op)
+				return errors.Wrapf(compute.ErrNotImplemented, "%s (%d) not implemented for ONNX Runtime backend", op, op)
 			},
 		},
 		name:    name,

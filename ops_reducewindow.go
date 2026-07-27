@@ -33,7 +33,7 @@ func (f *Function) ReduceWindow(
 	// Unsupported feature checks: ONNX pooling operators (MaxPool/AveragePool) do not support input dilations.
 	for _, d := range inputDilations {
 		if d > 1 {
-			return nil, compute.ErrNotImplemented
+			return nil, errors.Wrap(compute.ErrNotImplemented, "input dilations > 1 not supported by ONNX pooling operators")
 		}
 	}
 
@@ -44,7 +44,7 @@ func (f *Function) ReduceWindow(
 	case compute.ReduceOpSum:
 		ortOpType = "AveragePool"
 	default:
-		return nil, compute.ErrNotImplemented
+		return nil, errors.Wrapf(compute.ErrNotImplemented, "ReduceWindow reduction type %s not implemented", reductionType)
 	}
 
 	// If operand rank < 3 (e.g. 1D vector), unsqueeze to 4D (1, 1, 1, L) for ONNX pooling.
@@ -95,22 +95,15 @@ func (f *Function) ReduceWindow(
 	}
 
 	numSpatial := rank - 2
-	if windowDimensions[0] != 1 || windowDimensions[1] != 1 {
-		return nil, compute.ErrNotImplemented
-	}
 
-	// 1. Transpose input to NCHW / NCDHW format assuming NCHW layout by default
-	// If input is not in NCHW format (e.g. batch at 0, channel at rank-1), we keep it as NCHW format.
-	// For standard GoMLX models (e.g. CNN in MNIST demo), rank is 4: [batch, height, width, channels] or [batch, channels, height, width].
-	// Let's inspect windowDimensions: if windowDimensions has 1 at index 0 and index 1, batch=0, channel=1 (NCHW).
-	// If windowDimensions has 1 at index 0 and index rank-1, batch=0, channel=rank-1 (NHWC).
+	// Determine channel axis from windowDimensions (must be 1 for batch axis 0, and 1 for channel axis).
 	var channelAxis int
-	if windowDimensions[1] == 1 {
+	if windowDimensions[0] == 1 && windowDimensions[1] == 1 {
 		channelAxis = 1
-	} else if windowDimensions[rank-1] == 1 {
+	} else if windowDimensions[0] == 1 && windowDimensions[rank-1] == 1 {
 		channelAxis = rank - 1
 	} else {
-		return nil, errors.Wrap(compute.ErrNotImplemented, "ReduceWindow requires channel axis window dimension to be 1")
+		return nil, errors.Wrap(compute.ErrNotImplemented, "ReduceWindow requires batch and channel window dimensions to be 1")
 	}
 
 	inputPerm := make([]int, rank)

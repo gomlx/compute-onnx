@@ -30,7 +30,7 @@ func NewFunction(name string, builder *Builder) *Function {
 	return &Function{
 		Function: notimplemented.Function{
 			ErrFn: func(op compute.OpType) error {
-				return errors.Wrapf(compute.ErrNotImplemented, "%s not implemented for ONNX Runtime backend", op)
+				return errors.Wrapf(compute.ErrNotImplemented, "%s (%d) not implemented for ONNX Runtime backend", op, op)
 			},
 		},
 		name:    name,

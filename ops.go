@@ -18,6 +18,7 @@ func init() {
 	registerOp(compute.OpTypeDiv)
 	registerOp(compute.OpTypeMax)
 	registerOp(compute.OpTypeMin)
+	registerOp(compute.OpTypeRem)
 	registerOp(compute.OpTypePow)
 
 	// Bitwise & Shift
@@ -82,6 +83,7 @@ func init() {
 	registerOp(compute.OpTypeReduceLogicalXor)
 	registerOp(compute.OpTypeArgMinMax)
 	registerOp(compute.OpTypeReduceWindow)
+	registerOp(compute.OpTypeSelectAndScatterMax)
 
 	// DotGeneral / ConvGeneral
 	registerOp(compute.OpTypeDotGeneral)

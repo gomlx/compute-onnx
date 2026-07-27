@@ -27,6 +27,10 @@ func (f *Function) Div(lhs, rhs compute.Value) (compute.Value, error) {
 	return f.addBinaryOp(compute.OpTypeDiv, "Div", lhs, rhs)
 }
 
+func (f *Function) Rem(lhs, rhs compute.Value) (compute.Value, error) {
+	return f.addBinaryOp(compute.OpTypeRem, "Mod", lhs, rhs)
+}
+
 func (f *Function) Max(lhs, rhs compute.Value) (compute.Value, error) {
 	return f.addBinaryOp(compute.OpTypeMax, "Max", lhs, rhs)
 }

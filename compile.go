@@ -192,18 +192,24 @@ func (b *Builder) Compile() (compute.Executable, error) {
 			nodeInputs[i] = inp.name
 		}
 
+		nodeOutputs := node.outputNames
+		if len(nodeOutputs) == 0 {
+			nodeOutputs = []string{node.name}
+		}
+
 		nodeProto := &onnx.NodeProto{
 			Input:     nodeInputs,
-			Output:    []string{node.name},
+			Output:    nodeOutputs,
 			OpType:    node.opType,
+			Domain:    node.domain,
 			Attribute: node.attributes,
 		}
 		onnxNodes = append(onnxNodes, nodeProto)
 	}
 
 	graph := &onnx.GraphProto{
-		Node:        onnxNodes,
 		Name:        b.name,
+		Node:        onnxNodes,
 		Initializer: onnxInitializers,
 		Input:       inputs,
 		Output:      outputs,
@@ -216,6 +222,10 @@ func (b *Builder) Compile() (compute.Executable, error) {
 			{
 				Domain:  "",
 				Version: 21,
+			},
+			{
+				Domain:  "com.microsoft",
+				Version: 1,
 			},
 		},
 	}
