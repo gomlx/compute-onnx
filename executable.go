@@ -4,12 +4,15 @@ package onnxruntime
 
 import (
 	"sync"
+	"time"
 
 	"github.com/gomlx/compute"
+	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
-	ort "github.com/gomlx/compute-onnx/internal/ort"
+	"github.com/gomlx/compute/support/humanize"
 	"github.com/pkg/errors"
+	"k8s.io/klog/v2"
 )
 
 // cudaExecCtx holds per-execution CUDA state. Pooled for parallel-safe execution.
@@ -316,7 +319,15 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 	}
 
 	// 3. Execute.
-	if err := binding.RunWithBinding(); err != nil {
+	var start time.Time
+	if klog.V(1).Enabled() {
+		start = time.Now()
+	}
+	err = binding.RunWithBinding()
+	if klog.V(1).Enabled() {
+		klog.Infof("Execution (CUDA) elapsed time: %s\n", humanize.Duration(time.Since(start)))
+	}
+	if err != nil {
 		e.cudaCtxPool.put(ctx)
 		return nil, errors.Wrap(err, "onnxruntime CUDA execution failed")
 	}
@@ -409,7 +420,14 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 		ortOutputs[i] = outWrappers[i].Value()
 	}
 
+	var start time.Time
+	if klog.V(1).Enabled() {
+		start = time.Now()
+	}
 	err := e.session.Run(e.cachedOrtInputs, ortOutputs)
+	if klog.V(1).Enabled() {
+		klog.Infof("Execution (CPU) elapsed time: %s\n", humanize.Duration(time.Since(start)))
+	}
 	if err != nil {
 		for _, w := range outWrappers {
 			if w != nil {
