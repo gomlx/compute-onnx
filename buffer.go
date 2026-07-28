@@ -469,7 +469,41 @@ func (g *gpuTensorWrapper) ToFlatData(flat any) error {
 }
 
 func (g *gpuTensorWrapper) CopyFrom(flat any) error {
-	return errors.New("CopyFrom not supported for GPU buffers")
+	if g.size() == 0 {
+		return nil
+	}
+	switch f := flat.(type) {
+	case []float16.Float16:
+		f32 := float16ToFloat32(f)
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f32[0]), len(f32)*4)
+	case []bfloat16.BFloat16:
+		f32 := bfloat16ToFloat32(f)
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f32[0]), len(f32)*4)
+	case []float32:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*4)
+	case []float64:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*8)
+	case []int32:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*4)
+	case []int64:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*8)
+	case []bool:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*1)
+	case []int8:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*1)
+	case []uint8:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*1)
+	case []int16:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*2)
+	case []uint16:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*2)
+	case []uint32:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*4)
+	case []uint64:
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*8)
+	default:
+		return errors.Errorf("unsupported slice type %T for GPU CopyFrom", flat)
+	}
 }
 
 func (g *gpuTensorWrapper) GetData() any {

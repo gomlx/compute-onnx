@@ -153,6 +153,47 @@ func TestConcurrentExecution(t *testing.T) {
 	t.Logf("Successfully verified %d results from %d workers", len(allResults), numWorkers)
 }
 
+// TestMultiInputHostTensorsCUDA tests execution on CUDA backend when passing multiple host-allocated parameters.
+func TestMultiInputHostTensorsCUDA(t *testing.T) {
+	if backend == nil {
+		t.Skip("Backend not available")
+	}
+
+	exec, err := graph.NewExec(backend, func(a, b, c *graph.Node) *graph.Node {
+		// Calculate (a + b) * c
+		sum := graph.Add(a, b)
+		return graph.Mul(sum, c)
+	})
+	if err != nil {
+		t.Fatalf("NewExec failed: %v", err)
+	}
+
+	aData := []float32{1.0, 2.0, 3.0, 4.0}
+	bData := []float32{10.0, 20.0, 30.0, 40.0}
+	cData := []float32{2.0, 2.0, 2.0, 2.0}
+
+	aTensor := tensors.FromFlatDataAndDimensions(aData, 4)
+	bTensor := tensors.FromFlatDataAndDimensions(bData, 4)
+	cTensor := tensors.FromFlatDataAndDimensions(cData, 4)
+
+	outputs, err := exec.Call(aTensor, bTensor, cTensor)
+	if err != nil {
+		t.Fatalf("Execution with multiple host inputs failed: %v", err)
+	}
+
+	result := make([]float32, 4)
+	outputs[0].ConstFlatData(func(flat any) {
+		copy(result, flat.([]float32))
+	})
+
+	expected := []float32{22.0, 44.0, 66.0, 88.0}
+	for i := range expected {
+		if math.Abs(float64(result[i]-expected[i])) > 1e-5 {
+			t.Errorf("Element %d: expected %f, got %f", i, expected[i], result[i])
+		}
+	}
+}
+
 // Ensure unused imports are accounted for.
 var (
 	_ = dtypes.Float32

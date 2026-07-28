@@ -207,6 +207,8 @@ func (b *Builder) Compile() (compute.Executable, error) {
 		onnxNodes = append(onnxNodes, nodeProto)
 	}
 
+
+
 	graph := &onnx.GraphProto{
 		Name:        b.name,
 		Node:        onnxNodes,
@@ -264,6 +266,8 @@ func (b *Builder) Compile() (compute.Executable, error) {
 			}
 		}
 	}
+
+
 
 	session, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inputNames, outputNames, options)
 	if err != nil {

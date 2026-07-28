@@ -285,6 +285,14 @@ func NewDefaultAllocator() (*Allocator, error) {
 	return &Allocator{allocator: allocator}, nil
 }
 
+func (a *Allocator) Destroy() error {
+	if a.allocator != nil {
+		C.wrapper_ReleaseAllocator(ortApi, a.allocator)
+		a.allocator = nil
+	}
+	return nil
+}
+
 type MemoryInfo struct {
 	info *C.OrtMemoryInfo
 }
@@ -550,6 +558,8 @@ func NewEmptyTensor[T TensorData](shape Shape) (*Tensor[T], error) {
 	}, nil
 }
 
+
+
 func (s *Session) Run(inputNames []string, inputValues []Value, outputNames []string, outputValues []Value) error {
 	arena := GetArena(8192)
 	defer ReturnArena(arena)
@@ -702,12 +712,15 @@ func (s *DynamicAdvancedSession) Run(inputs []Value, outputs []Value) error {
 
 	for i := 0; i < nInputs; i++ {
 		inputNamesSlice[i] = s.cInputNames[i]
+		if inputs[i] == nil || inputs[i].cValue() == nil {
+			return fmt.Errorf("DynamicAdvancedSession.Run: input %d (%s) is nil", i, s.inputNames[i])
+		}
 		inputValuesSlice[i] = inputs[i].cValue()
 	}
 
 	for i := 0; i < nOutputs; i++ {
 		outputNamesSlice[i] = s.cOutputNames[i]
-		if outputs[i] != nil {
+		if outputs[i] != nil && outputs[i].cValue() != nil {
 			outputValuesSlice[i] = outputs[i].cValue()
 		} else {
 			outputValuesSlice[i] = nil

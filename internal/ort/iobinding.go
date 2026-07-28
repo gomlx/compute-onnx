@@ -61,6 +61,9 @@ func (b *IoBinding) Destroy() {
 
 // BindInput binds a Value (CPU or GPU OrtValue) as a named input.
 func (b *IoBinding) BindInput(name *C.char, val Value) error {
+	if val == nil || val.cValue() == nil {
+		return fmt.Errorf("cannot bind nil Value for input %s", C.GoString(name))
+	}
 	status := C.wrapper_BindInput(ortApi, b.binding, name, val.cValue())
 	return statusToError(status)
 }
@@ -156,4 +159,14 @@ func CopyGPUToHost(gpuValue Value, dst unsafe.Pointer, byteSize int) error {
 		return fmt.Errorf("failed to get GPU tensor data pointer: %w", err)
 	}
 	return CudaMemcpyD2H(dst, srcPtr, byteSize)
+}
+
+// CopyHostToGPU copies data from a host buffer to a GPU OrtValue.
+// Uses cudaMemcpy resolved via dlsym from the already-loaded CUDA runtime.
+func CopyHostToGPU(gpuValue Value, src unsafe.Pointer, byteSize int) error {
+	dstPtr, err := gpuValue.GetTensorMutableData()
+	if err != nil {
+		return fmt.Errorf("failed to get GPU tensor data pointer: %w", err)
+	}
+	return CudaMemcpyH2D(dstPtr, src, byteSize)
 }

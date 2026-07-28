@@ -7,7 +7,8 @@ package ort
 #include <stddef.h>
 #include <string.h>
 
-// cudaMemcpyKind enum value for DeviceToHost
+// cudaMemcpyKind enum values
+#define CUDA_MEMCPY_HOST_TO_DEVICE 1
 #define CUDA_MEMCPY_DEVICE_TO_HOST 2
 
 typedef int (*cudaMemcpyFn)(void* dst, const void* src, size_t count, int kind);
@@ -54,8 +55,14 @@ static int resolve_cuda_symbols() {
 // Returns CUDA error code (0 = success).
 static int cuda_memcpy_d2h(void* dst, const void* src, size_t count) {
     if (resolve_cuda_symbols() != 0) return -1;
-    // cudaMemcpy with DeviceToHost is synchronous on the default stream.
     return resolved_cudaMemcpy(dst, src, count, CUDA_MEMCPY_DEVICE_TO_HOST);
+}
+
+// Copy from host memory to GPU device memory.
+// Returns CUDA error code (0 = success).
+static int cuda_memcpy_h2d(void* dst, const void* src, size_t count) {
+    if (resolve_cuda_symbols() != 0) return -1;
+    return resolved_cudaMemcpy(dst, src, count, CUDA_MEMCPY_HOST_TO_DEVICE);
 }
 */
 import "C"
@@ -70,6 +77,16 @@ func CudaMemcpyD2H(hostDst unsafe.Pointer, deviceSrc unsafe.Pointer, byteSize in
 	ret := C.cuda_memcpy_d2h(hostDst, deviceSrc, C.size_t(byteSize))
 	if ret != 0 {
 		return fmt.Errorf("cudaMemcpy D2H failed with error code %d", int(ret))
+	}
+	return nil
+}
+
+// CudaMemcpyH2D copies byteSize bytes from a host pointer to a CUDA device pointer.
+// It uses dlsym to resolve cudaMemcpy from the already-loaded CUDA runtime.
+func CudaMemcpyH2D(deviceDst unsafe.Pointer, hostSrc unsafe.Pointer, byteSize int) error {
+	ret := C.cuda_memcpy_h2d(deviceDst, hostSrc, C.size_t(byteSize))
+	if ret != 0 {
+		return fmt.Errorf("cudaMemcpy H2D failed with error code %d", int(ret))
 	}
 	return nil
 }

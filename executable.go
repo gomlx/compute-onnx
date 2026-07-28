@@ -15,56 +15,6 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// cudaExecCtx holds per-execution CUDA state. Pooled for parallel-safe execution.
-type cudaExecCtx struct {
-	ioBinding   *ort.IoBinding
-	cudaMemInfo *ort.MemoryInfo
-}
-
-// cudaExecPool manages a pool of cudaExecCtx with proper lifecycle tracking.
-type cudaExecPool struct {
-	mu      sync.Mutex
-	free    []*cudaExecCtx
-	all     []*cudaExecCtx
-	newFunc func() (*cudaExecCtx, error)
-}
-
-func (p *cudaExecPool) get() (*cudaExecCtx, error) {
-	p.mu.Lock()
-	if n := len(p.free); n > 0 {
-		ctx := p.free[n-1]
-		p.free = p.free[:n-1]
-		p.mu.Unlock()
-		return ctx, nil
-	}
-	p.mu.Unlock()
-	ctx, err := p.newFunc()
-	if err != nil {
-		return nil, err
-	}
-	p.mu.Lock()
-	p.all = append(p.all, ctx)
-	p.mu.Unlock()
-	return ctx, nil
-}
-
-func (p *cudaExecPool) put(ctx *cudaExecCtx) {
-	p.mu.Lock()
-	p.free = append(p.free, ctx)
-	p.mu.Unlock()
-}
-
-func (p *cudaExecPool) destroyAll() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, ctx := range p.all {
-		ctx.ioBinding.Destroy()
-		_ = ctx.cudaMemInfo.Destroy()
-	}
-	p.all = nil
-	p.free = nil
-}
-
 type Executable struct {
 	backend          *Backend
 	session          *ort.DynamicAdvancedSession
@@ -78,9 +28,6 @@ type Executable struct {
 	cachedOrtInputs  []ort.Value
 	cachedOutWraps   []ortTensorWrapper
 	cachedOrtOutputs []ort.Value
-
-	// CUDA execution context pool — one context per concurrent execution.
-	cudaCtxPool cudaExecPool
 
 	// Mutex to protect reusableWrappers for concurrent buffer finalization.
 	mu sync.Mutex
@@ -109,7 +56,6 @@ func newExecutable(backend *Backend, session *ort.DynamicAdvancedSession,
 }
 
 func (e *Executable) Finalize() {
-	e.cudaCtxPool.destroyAll()
 	if e.session != nil {
 		_ = e.session.Destroy()
 		e.session = nil
@@ -212,7 +158,7 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 	}
 
 	if e.backend.cuda {
-		// CUDA path: build a local ortInputs slice (e.cachedOrtInputs is not safe for concurrent calls).
+		// CUDA path: build local ortInputs slice.
 		ortInputs := make([]ort.Value, len(e.inputNames))
 		var dummyWrapper ortTensorWrapper
 		if isDummyInput {
@@ -241,7 +187,10 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 		return result, err
 	}
 
-	// CPU path: populate shared cachedOrtInputs (single-threaded).
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Populate shared cachedOrtInputs.
 	var dummyInputWrapper ortTensorWrapper
 	if isDummyInput {
 		wrapper, err := newOrtTensorWrapper(e.inputShapes[0], []int32{0})
@@ -272,78 +221,57 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 	return e.executeCPU(inputs, donate, defaultDevice)
 }
 
-// executeCUDA uses IoBinding to keep data on GPU between executions.
-// Uses a pooled execution context for parallel safety.
+// executeCUDA uses IoBinding to run ONNX Runtime models on GPU.
 func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
-	// Initialize the pool's factory function lazily (only once).
-	e.cudaCtxPool.mu.Lock()
-	if e.cudaCtxPool.newFunc == nil {
-		e.cudaCtxPool.newFunc = func() (*cudaExecCtx, error) {
-			ioBinding, err := e.session.CreateIoBinding()
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to create IoBinding")
-			}
-			cudaMemInfo, err := ort.NewCUDAMemoryInfo()
-			if err != nil {
-				ioBinding.Destroy()
-				return nil, errors.Wrap(err, "failed to create CUDA MemoryInfo")
-			}
-			return &cudaExecCtx{ioBinding: ioBinding, cudaMemInfo: cudaMemInfo}, nil
-		}
-	}
-	e.cudaCtxPool.mu.Unlock()
-
-	ctx, err := e.cudaCtxPool.get()
+	ioBinding, err := e.session.CreateIoBinding()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to create IoBinding")
 	}
+	defer ioBinding.Destroy()
 
-	binding := ctx.ioBinding
+	cudaMemInfo, err := ort.NewCUDAMemoryInfo()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create CUDA MemoryInfo")
+	}
+	defer cudaMemInfo.Destroy()
+
 	cInputNames := e.session.CInputNames()
 	cOutputNames := e.session.COutputNames()
 
-	// 1. Bind inputs.
 	for i := range ortInputs {
-		if err := binding.BindInput(cInputNames[i], ortInputs[i]); err != nil {
-			e.cudaCtxPool.put(ctx)
+		if err := ioBinding.BindInput(cInputNames[i], ortInputs[i]); err != nil {
 			return nil, errors.Wrapf(err, "failed to bind input %d", i)
 		}
 	}
 
-	// 2. Bind outputs — let ORT allocate on GPU.
 	for i := range e.outputShapes {
-		if err := binding.BindOutputToDevice(cOutputNames[i], ctx.cudaMemInfo); err != nil {
-			e.cudaCtxPool.put(ctx)
+		if err := ioBinding.BindOutputToDevice(cOutputNames[i], cudaMemInfo); err != nil {
 			return nil, errors.Wrapf(err, "failed to bind output %d to CUDA", i)
 		}
 	}
 
-	// 3. Execute.
 	var start time.Time
 	if klog.V(1).Enabled() {
 		start = time.Now()
 	}
-	err = binding.RunWithBinding()
+	if klog.V(2).Enabled() {
+		klog.Infof("Starting IoBinding.RunWithBinding on cuda (inputs=%d, outputs=%d)...", len(ortInputs), len(e.outputShapes))
+	}
+	e.mu.Lock()
+	err = ioBinding.RunWithBinding()
+	e.mu.Unlock()
 	if klog.V(1).Enabled() {
 		klog.Infof("Execution (CUDA) elapsed time: %s\n", humanize.Duration(time.Since(start)))
 	}
 	if err != nil {
-		e.cudaCtxPool.put(ctx)
 		return nil, errors.Wrap(err, "onnxruntime CUDA execution failed")
 	}
 
-	// 4. Retrieve output OrtValues (GPU-resident, caller owns them).
-	outputValues, err := binding.GetBoundOutputValues()
+	outputValues, err := ioBinding.GetBoundOutputValues()
 	if err != nil {
-		e.cudaCtxPool.put(ctx)
 		return nil, errors.Wrap(err, "failed to get bound output values")
 	}
 
-	// Return context to pool — output OrtValues are now owned by the caller
-	// via GetBoundOutputValues, independent of the binding's lifecycle.
-	e.cudaCtxPool.put(ctx)
-
-	// 5. Wrap outputs in CUDA Buffers.
 	outBuffers := make([]compute.Buffer, len(e.outputShapes))
 	for i, sh := range e.outputShapes {
 		ortShape := ort.NewShape(toInt64s(sh.Dimensions)...)
@@ -361,7 +289,6 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 		}
 	}
 
-	// 6. Finalize all donated inputs.
 	for i, inp := range inputs {
 		if i < len(donate) && donate[i] {
 			buf := inp.(*Buffer)
@@ -375,12 +302,13 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 	return outBuffers, nil
 }
 
+
+
 // executeCPU is the optimized execution path for CPU with pre-allocated outputs and recycling.
 func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
 	outWrappers := e.cachedOutWraps
 	ortOutputs := e.cachedOrtOutputs
 
-	e.mu.Lock()
 	for i, sh := range e.outputShapes {
 		matchedIdx := -1
 		for idx, rw := range e.reusableWrappers {
@@ -401,7 +329,6 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 			outWrappers[i] = nil // mark as needing allocation
 		}
 	}
-	e.mu.Unlock()
 
 	// Allocate any output wrappers that weren't found in pool (outside lock).
 	for i, sh := range e.outputShapes {
@@ -424,9 +351,12 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 	if klog.V(1).Enabled() {
 		start = time.Now()
 	}
+	if klog.V(2).Enabled() {
+		klog.Infof("Starting session.Run on %s (inputs=%d, outputs=%d)...", e.backend.config, len(e.cachedOrtInputs), len(ortOutputs))
+	}
 	err := e.session.Run(e.cachedOrtInputs, ortOutputs)
 	if klog.V(1).Enabled() {
-		klog.Infof("Execution (CPU) elapsed time: %s\n", humanize.Duration(time.Since(start)))
+		klog.Infof("Execution (%s) elapsed time: %s\n", e.backend.config, humanize.Duration(time.Since(start)))
 	}
 	if err != nil {
 		for _, w := range outWrappers {

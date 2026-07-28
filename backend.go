@@ -251,6 +251,10 @@ func (b *Backend) Builder(name string) compute.Builder {
 }
 
 func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shape shapes.Shape) (compute.Buffer, error) {
+	return b.bufferFromFlatDataCPU(deviceNum, flat, shape)
+}
+
+func (b *Backend) bufferFromFlatDataCPU(deviceNum compute.DeviceNum, flat any, shape shapes.Shape) (*Buffer, error) {
 	wrapper, err := newOrtTensorWrapper(shape, flat)
 	if err != nil {
 		return nil, err
@@ -263,6 +267,8 @@ func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shap
 		isShared: true,
 	}, nil
 }
+
+
 
 func (b *Backend) HasSharedBuffers() bool {
 	return !b.cuda
