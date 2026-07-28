@@ -145,33 +145,59 @@ func (f *Function) DotGeneral(
 		}
 	}
 
-	equation := fmt.Sprintf("%s,%s->%s",
-		strings.Join(lhsChars, ""),
-		strings.Join(rhsChars, ""),
-		strings.Join(outputChars, ""),
-	)
-
-	// 3. Create Einsum node
-	einsumShape := outShape
-	einsumShape.DType = accumulationDType
-
-	f.nodeCount++
-	einsumNode := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
-		opType: "Einsum",
-		inputs: []*Node{lhsInput, rhsInput},
-		shape:  einsumShape,
-		attributes: []*onnx.AttributeProto{
-			{
-				Name: "equation",
-				Type: onnx.AttributeProto_STRING,
-				S:    []byte(equation),
-			},
-		},
+	// 2. Optimization: Use standard MatMul for 2D or batched matrix multiplication when contracting last dim of LHS and second-to-last dim of RHS
+	var lastNode *Node
+	batchAxesMatch := true
+	if len(lhsBatchAxes) != len(rhsBatchAxes) {
+		batchAxesMatch = false
+	} else {
+		for i, ba := range lhsBatchAxes {
+			if rhsBatchAxes[i] != ba {
+				batchAxesMatch = false
+				break
+			}
+		}
 	}
-	f.nodes = append(f.nodes, einsumNode)
+	isStandardMatMul := batchAxesMatch && len(lhsContractingAxes) == 1 && lhsContractingAxes[0] == lhsRank-1 &&
+		len(rhsContractingAxes) == 1 && rhsContractingAxes[0] == rhsRank-2
+	if isStandardMatMul {
+		f.nodeCount++
+		matmulNode := &Node{
+			name:   fmt.Sprintf("node_%d", f.nodeCount),
+			opType: "MatMul",
+			inputs: []*Node{lhsInput, rhsInput},
+			shape:  outShape,
+		}
+		f.nodes = append(f.nodes, matmulNode)
+		lastNode = matmulNode
+	} else {
+		// 3. Fallback: Generate Einsum equation
+		equation := fmt.Sprintf("%s,%s->%s",
+			strings.Join(lhsChars, ""),
+			strings.Join(rhsChars, ""),
+			strings.Join(outputChars, ""),
+		)
 
-	var lastNode *Node = einsumNode
+		einsumShape := outShape
+		einsumShape.DType = accumulationDType
+
+		f.nodeCount++
+		einsumNode := &Node{
+			name:   fmt.Sprintf("node_%d", f.nodeCount),
+			opType: "Einsum",
+			inputs: []*Node{lhsInput, rhsInput},
+			shape:  einsumShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "equation",
+					Type: onnx.AttributeProto_STRING,
+					S:    []byte(equation),
+				},
+			},
+		}
+		f.nodes = append(f.nodes, einsumNode)
+		lastNode = einsumNode
+	}
 	if outShape.Rank() == 0 {
 		newDimsConst, err := f.Constant([]int64{1}, 1)
 		if err != nil {
@@ -182,7 +208,7 @@ func (f *Function) DotGeneral(
 		reshapeNode := &Node{
 			name:   fmt.Sprintf("node_%d", f.nodeCount),
 			opType: "Reshape",
-			inputs: []*Node{einsumNode, newDimsConst.(*Node)},
+			inputs: []*Node{lastNode, newDimsConst.(*Node)},
 			shape:  outShape,
 		}
 		f.nodes = append(f.nodes, reshapeNode)
