@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -109,9 +110,23 @@ type Backend struct {
 var _ compute.Backend = (*Backend)(nil)
 var _ compute.DataInterface = (*Backend)(nil)
 
+// IsSupportedPlatform returns true if the host OS and CPU architecture are supported by ONNX Runtime binaries.
+func IsSupportedPlatform() bool {
+	switch runtime.GOOS {
+	case "linux", "darwin", "windows":
+		switch runtime.GOARCH {
+		case "amd64", "arm64":
+			return true
+		}
+	}
+	return false
+}
+
 func init() {
-	compute.Register(BackendName, New)
-	compute.Register("onnx", New)
+	if IsSupportedPlatform() {
+		compute.Register(BackendName, New)
+		compute.Register("onnx", New)
+	}
 
 	if _, found := os.LookupEnv(NoAutoInstallEnv); found {
 		autoInstall = false
@@ -176,6 +191,10 @@ func parseConfig(config string) (cuda bool, logSeverity int, err error) {
 }
 
 func New(config string) (compute.Backend, error) {
+	if !IsSupportedPlatform() {
+		return nil, errors.Errorf("onnxruntime backend is not supported on platform %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+
 	cuda, logSeverity, err := parseConfig(config)
 	if err != nil {
 		return nil, err
