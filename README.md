@@ -1,5 +1,7 @@
 # compute-onnx
 
+[![Documentation](https://img.shields.io/badge/docs-gomlx.github.io-blue.svg)](https://gomlx.github.io/)
+
 **EXPERIMENTAL**
 
 ONNX Runtime based compute backend for GoMLX.
