@@ -1,6 +1,6 @@
 //go:build linux
 
-package onnxruntime
+package onnxbackend
 
 import (
 	"os"

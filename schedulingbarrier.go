@@ -1,6 +1,6 @@
 // Copyright 2026 The GoMLX Authors. SPDX-License-Identifier: Apache-2.0
 
-package onnxruntime
+package onnxbackend
 
 import (
 	"github.com/gomlx/compute"

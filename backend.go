@@ -1,6 +1,6 @@
 // Copyright 2023-2026 The GoMLX Authors. SPDX-License-Identifier: Apache-2.0
 
-package onnxruntime
+package onnxbackend
 
 import (
 	"fmt"
@@ -229,7 +229,6 @@ func (b *Backend) Capabilities() compute.Capabilities {
 	caps := compute.Capabilities{
 		Operations:                  getSupportedOps(),
 		DTypes:                      make(map[dtypes.DType]bool),
-		DynamicAxes:                 true,
 		PreferConstantsForVariables: true,
 	}
 	caps.DTypes[dtypes.Float32] = true

@@ -1,6 +1,6 @@
 //go:build !linux
 
-package onnxruntime
+package onnxbackend
 
 // HasNvidiaGPU returns false on non-Linux platforms.
 func HasNvidiaGPU() bool {
