@@ -3,6 +3,7 @@
 package onnxruntime
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 
@@ -25,10 +26,18 @@ func shapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
 	}
 	onnxDims := make([]*onnx.TensorShapeProto_Dimension, len(dims))
 	for i, d := range dims {
-		onnxDims[i] = &onnx.TensorShapeProto_Dimension{
-			Value: &onnx.TensorShapeProto_Dimension_DimValue{
-				DimValue: int64(d),
-			},
+		if d == shapes.DynamicDim {
+			onnxDims[i] = &onnx.TensorShapeProto_Dimension{
+				Value: &onnx.TensorShapeProto_Dimension_DimParam{
+					DimParam: fmt.Sprintf("axis_%d", i),
+				},
+			}
+		} else {
+			onnxDims[i] = &onnx.TensorShapeProto_Dimension{
+				Value: &onnx.TensorShapeProto_Dimension_DimValue{
+					DimValue: int64(d),
+				},
+			}
 		}
 	}
 	return &onnx.TensorShapeProto{

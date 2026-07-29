@@ -227,8 +227,10 @@ func (b *Backend) DeviceDescription(deviceNum compute.DeviceNum) string {
 
 func (b *Backend) Capabilities() compute.Capabilities {
 	caps := compute.Capabilities{
-		Operations: getSupportedOps(),
-		DTypes:     make(map[dtypes.DType]bool),
+		Operations:                  getSupportedOps(),
+		DTypes:                      make(map[dtypes.DType]bool),
+		DynamicAxes:                 true,
+		PreferConstantsForVariables: true,
 	}
 	caps.DTypes[dtypes.Float32] = true
 	caps.DTypes[dtypes.Float64] = true
