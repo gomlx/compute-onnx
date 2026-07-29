@@ -4,6 +4,7 @@ package onnxruntime
 
 import (
 	"os"
+	"runtime"
 
 	"github.com/gomlx/compute"
 	onnx "github.com/gomlx/compute-onnx/internal/protos"
@@ -207,8 +208,6 @@ func (b *Builder) Compile() (compute.Executable, error) {
 		onnxNodes = append(onnxNodes, nodeProto)
 	}
 
-
-
 	graph := &onnx.GraphProto{
 		Name:        b.name,
 		Node:        onnxNodes,
@@ -237,37 +236,48 @@ func (b *Builder) Compile() (compute.Executable, error) {
 		return nil, errors.Wrap(err, "failed to marshal ONNX ModelProto")
 	}
 
+	// Strategy A: Immediately release Go AST structs & backing slices and trigger GC
+	// before creating the ONNX Runtime session.
+	model = nil
+	graph = nil
+	onnxNodes = nil
+	onnxInitializers = nil
+	for _, node := range mainFn.nodes {
+		node.flatValue = nil
+	}
+	runtime.GC()
+
 	var options *ort.SessionOptions
-	if b.backend.cuda || b.backend.logSeverity >= 0 {
-		var err error
-		options, err = ort.NewSessionOptions()
+	if options, err = ort.NewSessionOptions(); err != nil {
+		return nil, errors.Wrap(err, "failed to create ONNX Runtime SessionOptions")
+	}
+	defer options.Destroy()
+
+	if b.backend.cuda {
+		cudaOpts, err := ort.NewCUDAProviderOptions()
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to create ONNX Runtime SessionOptions")
+			return nil, errors.Wrap(err, "failed to create ONNX Runtime CUDAProviderOptions")
 		}
-		defer options.Destroy()
+		defer cudaOpts.Destroy()
 
-		if b.backend.cuda {
-			cudaOpts, err := ort.NewCUDAProviderOptions()
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to create ONNX Runtime CUDAProviderOptions")
-			}
-			defer cudaOpts.Destroy()
+		_ = cudaOpts.Update(map[string]string{
+			"do_copy_in_default_stream": "1",
+		})
 
-			err = options.AppendExecutionProviderCUDA(cudaOpts)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to append CUDA execution provider to SessionOptions")
-			}
-		}
-
-		if b.backend.logSeverity >= 0 {
-			err = options.SetSessionLogSeverityLevel(b.backend.logSeverity)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to set ONNX Runtime session log severity level")
-			}
+		err = options.AppendExecutionProviderCUDA(cudaOpts)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to append CUDA execution provider to SessionOptions")
 		}
 	}
 
-
+	logSev := b.backend.logSeverity
+	if logSev < 0 {
+		logSev = 3 // ORT_LOGGING_LEVEL_ERROR by default
+	}
+	err = options.SetSessionLogSeverityLevel(logSev)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to set ONNX Runtime session log severity level")
+	}
 
 	session, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inputNames, outputNames, options)
 	if err != nil {

@@ -194,6 +194,56 @@ func TestMultiInputHostTensorsCUDA(t *testing.T) {
 	}
 }
 
+// TestGatherEmbeddingCUDA tests embedding lookup via Gather on axis 0 with CUDA backend.
+func TestGatherEmbeddingCUDA(t *testing.T) {
+	if backend == nil {
+		t.Skip("Backend not available")
+	}
+
+	exec, err := graph.NewExec(backend, func(embeddingTable, indices *graph.Node) *graph.Node {
+		return graph.Gather(embeddingTable, indices)
+	})
+	if err != nil {
+		t.Fatalf("NewExec failed: %v", err)
+	}
+
+	// Embedding table: shape (4, 3)
+	embedData := []float32{
+		0.0, 0.1, 0.2, // idx 0
+		1.0, 1.1, 1.2, // idx 1
+		2.0, 2.1, 2.2, // idx 2
+		3.0, 3.1, 3.2, // idx 3
+	}
+	embedTensor := tensors.FromFlatDataAndDimensions(embedData, 4, 3)
+
+	// Indices: shape (2, 2, 1)
+	indicesData := []int64{3, 1, 0, 2}
+	indicesTensor := tensors.FromFlatDataAndDimensions(indicesData, 2, 2, 1)
+
+	outputs, err := exec.Call(embedTensor, indicesTensor)
+	if err != nil {
+		t.Fatalf("Gather execution on CUDA failed: %v", err)
+	}
+
+	result := make([]float32, 2*2*3)
+	outputs[0].ConstFlatData(func(flat any) {
+		copy(result, flat.([]float32))
+	})
+
+	expected := []float32{
+		3.0, 3.1, 3.2, // idx 3
+		1.0, 1.1, 1.2, // idx 1
+		0.0, 0.1, 0.2, // idx 0
+		2.0, 2.1, 2.2, // idx 2
+	}
+
+	for i := range expected {
+		if math.Abs(float64(result[i]-expected[i])) > 1e-5 {
+			t.Errorf("Element %d: expected %f, got %f", i, expected[i], result[i])
+		}
+	}
+}
+
 // Ensure unused imports are accounted for.
 var (
 	_ = dtypes.Float32

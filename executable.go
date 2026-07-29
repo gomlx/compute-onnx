@@ -3,6 +3,7 @@
 package onnxruntime
 
 import (
+	"runtime"
 	"sync"
 	"time"
 
@@ -157,7 +158,9 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 		return nil, errors.Errorf("expected %d inputs, got %d", expectedInputs, len(inputs))
 	}
 
+	defer runtime.KeepAlive(inputs)
 	if e.backend.cuda {
+
 		// CUDA path: build local ortInputs slice.
 		ortInputs := make([]ort.Value, len(e.inputNames))
 		var dummyWrapper ortTensorWrapper
@@ -223,6 +226,8 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 
 // executeCUDA uses IoBinding to run ONNX Runtime models on GPU.
 func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
+	defer runtime.KeepAlive(inputs)
+	defer runtime.KeepAlive(ortInputs)
 	ioBinding, err := e.session.CreateIoBinding()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create IoBinding")
@@ -354,6 +359,8 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 	if klog.V(2).Enabled() {
 		klog.Infof("Starting session.Run on %s (inputs=%d, outputs=%d)...", e.backend.config, len(e.cachedOrtInputs), len(ortOutputs))
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	err := e.session.Run(e.cachedOrtInputs, ortOutputs)
 	if klog.V(1).Enabled() {
 		klog.Infof("Execution (%s) elapsed time: %s\n", e.backend.config, humanize.Duration(time.Since(start)))
@@ -371,13 +378,17 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 	// Must allocate fresh slice each call since it escapes to the caller.
 	outBuffers := make([]compute.Buffer, len(e.outputShapes))
 	for i, sh := range e.outputShapes {
+		execBackpointer := e
+		if e.backend.cuda {
+			execBackpointer = nil // Don't recycle wrappers on CUDA; destroy them on Finalize
+		}
 		outBuffers[i] = &Buffer{
 			backend:    e.backend,
 			wrapper:    outWrappers[i],
 			shape:      sh,
 			device:     defaultDevice,
 			isShared:   true,
-			executable: e, // back-pointer for recycling on Finalize
+			executable: execBackpointer,
 		}
 		outWrappers[i] = nil // ownership transferred to Buffer
 	}

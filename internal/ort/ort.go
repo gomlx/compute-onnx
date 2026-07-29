@@ -39,6 +39,7 @@ void wrapper_ReleaseStatus(const OrtApi* api, OrtStatus* status);
 OrtStatus* wrapper_GetAllocatorWithDefaultOptions(const OrtApi* api, OrtAllocator** out);
 
 OrtStatus* wrapper_CreateCUDAProviderOptions(const OrtApi* api, OrtCUDAProviderOptionsV2** out);
+OrtStatus* wrapper_UpdateCUDAProviderOptions(const OrtApi* api, OrtCUDAProviderOptionsV2* cuda_options, const char* const* keys, const char* const* values, size_t num_keys);
 OrtStatus* wrapper_SessionOptionsAppendExecutionProvider_CUDA_V2(const OrtApi* api, OrtSessionOptions* options, const OrtCUDAProviderOptionsV2* cuda_options);
 void wrapper_ReleaseCUDAProviderOptions(const OrtApi* api, OrtCUDAProviderOptionsV2* input);
 
@@ -47,6 +48,7 @@ OrtStatus* wrapper_GetTensorElementType(const OrtApi* api, const OrtTensorTypeAn
 OrtStatus* wrapper_GetDimensionsCount(const OrtApi* api, const OrtTensorTypeAndShapeInfo* info, size_t* out);
 OrtStatus* wrapper_GetDimensions(const OrtApi* api, const OrtTensorTypeAndShapeInfo* info, int64_t* dim_values, size_t dim_values_length);
 void wrapper_ReleaseTensorTypeAndShapeInfo(const OrtApi* api, OrtTensorTypeAndShapeInfo* info);
+OrtStatus* wrapper_AddInitializer(const OrtApi* api, OrtSessionOptions* options, const char* name, const OrtValue* val);
 OrtStatus* wrapper_SetSessionLogSeverityLevel(const OrtApi* api, OrtSessionOptions* options, int session_log_severity_level);
 
 // IoBinding
@@ -72,6 +74,8 @@ OrtStatus* wrapper_AllocatorFree(const OrtApi* api, OrtAllocator* allocator, voi
 import "C"
 import (
 	"fmt"
+	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -142,7 +146,7 @@ func NewEnv(logID string) (*Env, error) {
 	defer C.free(unsafe.Pointer(logIDC))
 
 	var env *C.OrtEnv
-	status := C.wrapper_CreateEnv(ortApi, C.ORT_LOGGING_LEVEL_WARNING, logIDC, &env)
+	status := C.wrapper_CreateEnv(ortApi, C.ORT_LOGGING_LEVEL_ERROR, logIDC, &env)
 	if err := statusToError(status); err != nil {
 		return nil, err
 	}
@@ -183,6 +187,16 @@ func (so *SessionOptions) AppendExecutionProviderCUDA(cudaOpts *CUDAProviderOpti
 	return statusToError(status)
 }
 
+func (so *SessionOptions) AddInitializer(name string, val Value) error {
+	if val == nil || val.cValue() == nil {
+		return fmt.Errorf("cannot add nil OrtValue initializer for %s", name)
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	status := C.wrapper_AddInitializer(ortApi, so.options, cName, val.cValue())
+	return statusToError(status)
+}
+
 func (so *SessionOptions) SetSessionLogSeverityLevel(level int) error {
 	status := C.wrapper_SetSessionLogSeverityLevel(ortApi, so.options, C.int(level))
 	return statusToError(status)
@@ -199,6 +213,30 @@ func NewCUDAProviderOptions() (*CUDAProviderOptions, error) {
 		return nil, err
 	}
 	return &CUDAProviderOptions{cudaOpts: cudaOpts}, nil
+}
+
+func (c *CUDAProviderOptions) Update(keys map[string]string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	cKeys := make([]*C.char, 0, len(keys))
+	cVals := make([]*C.char, 0, len(keys))
+	for k, v := range keys {
+		ck := C.CString(k)
+		cv := C.CString(v)
+		defer C.free(unsafe.Pointer(ck))
+		defer C.free(unsafe.Pointer(cv))
+		cKeys = append(cKeys, ck)
+		cVals = append(cVals, cv)
+	}
+	status := C.wrapper_UpdateCUDAProviderOptions(
+		ortApi,
+		c.cudaOpts,
+		(**C.char)(unsafe.Pointer(&cKeys[0])),
+		(**C.char)(unsafe.Pointer(&cVals[0])),
+		C.size_t(len(keys)),
+	)
+	return statusToError(status)
 }
 
 func (c *CUDAProviderOptions) Destroy() error {
@@ -381,8 +419,9 @@ func (r *RawValue) cValue() *C.OrtValue {
 }
 
 type Tensor[T TensorData] struct {
-	val   *C.OrtValue
-	shape Shape
+	val     *C.OrtValue
+	shape   Shape
+	rawData unsafe.Pointer
 }
 
 func (t *Tensor[T]) GetShape() Shape {
@@ -428,6 +467,10 @@ func (t *Tensor[T]) Destroy() error {
 	if t.val != nil {
 		C.wrapper_ReleaseValue(ortApi, t.val)
 		t.val = nil
+	}
+	if t.rawData != nil {
+		C.free(t.rawData)
+		t.rawData = nil
 	}
 	return nil
 }
@@ -477,7 +520,8 @@ func NewTensor[T TensorData](shape Shape, data []T) (*Tensor[T], error) {
 	dataLen := len(data) * int(unsafe.Sizeof(dummy))
 	var dataPtr unsafe.Pointer
 	if len(data) > 0 {
-		dataPtr = unsafe.Pointer(&data[0])
+		dataPtr = C.malloc(C.size_t(dataLen))
+		copy(unsafe.Slice((*T)(dataPtr), len(data)), data)
 	}
 	status := C.wrapper_CreateTensorWithDataAsOrtValue(
 		ortApi,
@@ -490,12 +534,16 @@ func NewTensor[T TensorData](shape Shape, data []T) (*Tensor[T], error) {
 		&val,
 	)
 	if err := statusToError(status); err != nil {
+		if dataPtr != nil {
+			C.free(dataPtr)
+		}
 		return nil, err
 	}
 
 	return &Tensor[T]{
-		val:   val,
-		shape: shape,
+		val:     val,
+		shape:   shape,
+		rawData: dataPtr,
 	}, nil
 }
 
@@ -687,7 +735,10 @@ func (s *DynamicAdvancedSession) Destroy() error {
 	return nil
 }
 
+var runMu sync.Mutex
+
 func (s *DynamicAdvancedSession) Run(inputs []Value, outputs []Value) error {
+	defer runtime.KeepAlive(inputs)
 	nInputs := len(s.inputNames)
 	nOutputs := len(s.outputNames)
 
@@ -697,18 +748,19 @@ func (s *DynamicAdvancedSession) Run(inputs []Value, outputs []Value) error {
 	if arenaSize < 2048 {
 		arenaSize = 2048
 	}
-	arena := GetArena(arenaSize)
-	defer ReturnArena(arena)
+	inputNamesPtr := (*C.char)(C.calloc(C.size_t(nInputs), C.size_t(unsafe.Sizeof(uintptr(0)))))
+	defer C.free(unsafe.Pointer(inputNamesPtr))
+	inputValuesPtr := (*C.OrtValue)(C.calloc(C.size_t(nInputs), C.size_t(unsafe.Sizeof(uintptr(0)))))
+	defer C.free(unsafe.Pointer(inputValuesPtr))
+	outputNamesPtr := (*C.char)(C.calloc(C.size_t(nOutputs), C.size_t(unsafe.Sizeof(uintptr(0)))))
+	defer C.free(unsafe.Pointer(outputNamesPtr))
+	outputValuesPtr := (*C.OrtValue)(C.calloc(C.size_t(nOutputs), C.size_t(unsafe.Sizeof(uintptr(0)))))
+	defer C.free(unsafe.Pointer(outputValuesPtr))
 
-	inputNamesPtr := arena.AllocCharStarSlice(nInputs)
-	inputValuesPtr := arena.AllocOrtValueStarSlice(nInputs)
-	outputNamesPtr := arena.AllocCharStarSlice(nOutputs)
-	outputValuesPtr := arena.AllocOrtValueStarSlice(nOutputs)
-
-	inputNamesSlice := unsafe.Slice(inputNamesPtr, nInputs)
-	inputValuesSlice := unsafe.Slice(inputValuesPtr, nInputs)
-	outputNamesSlice := unsafe.Slice(outputNamesPtr, nOutputs)
-	outputValuesSlice := unsafe.Slice(outputValuesPtr, nOutputs)
+	inputNamesSlice := unsafe.Slice((**C.char)(unsafe.Pointer(inputNamesPtr)), nInputs)
+	inputValuesSlice := unsafe.Slice((**C.OrtValue)(unsafe.Pointer(inputValuesPtr)), nInputs)
+	outputNamesSlice := unsafe.Slice((**C.char)(unsafe.Pointer(outputNamesPtr)), nOutputs)
+	outputValuesSlice := unsafe.Slice((**C.OrtValue)(unsafe.Pointer(outputValuesPtr)), nOutputs)
 
 	for i := 0; i < nInputs; i++ {
 		inputNamesSlice[i] = s.cInputNames[i]
@@ -727,17 +779,19 @@ func (s *DynamicAdvancedSession) Run(inputs []Value, outputs []Value) error {
 		}
 	}
 
+	runMu.Lock()
 	status := C.wrapper_Run(
 		ortApi,
 		s.session.session,
 		nil, // OrtRunOptions
-		inputNamesPtr,
-		inputValuesPtr,
+		(**C.char)(unsafe.Pointer(inputNamesPtr)),
+		(**C.OrtValue)(unsafe.Pointer(inputValuesPtr)),
 		C.size_t(nInputs),
-		outputNamesPtr,
+		(**C.char)(unsafe.Pointer(outputNamesPtr)),
 		C.size_t(nOutputs),
-		outputValuesPtr,
+		(**C.OrtValue)(unsafe.Pointer(outputValuesPtr)),
 	)
+	runMu.Unlock()
 
 	if err := statusToError(status); err != nil {
 		return err

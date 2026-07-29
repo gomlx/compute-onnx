@@ -96,6 +96,14 @@ OrtStatus* wrapper_CreateCUDAProviderOptions(const OrtApi* api, OrtCUDAProviderO
     return api->CreateCUDAProviderOptions(out);
 }
 
+OrtStatus* wrapper_UpdateCUDAProviderOptions(const OrtApi* api, OrtCUDAProviderOptionsV2* cuda_options, const char* const* keys, const char* const* values, size_t num_keys) {
+    return api->UpdateCUDAProviderOptions(cuda_options, keys, values, num_keys);
+}
+
+OrtStatus* wrapper_AddInitializer(const OrtApi* api, OrtSessionOptions* options, const char* name, const OrtValue* val) {
+    return api->AddInitializer(options, name, val);
+}
+
 OrtStatus* wrapper_SessionOptionsAppendExecutionProvider_CUDA_V2(const OrtApi* api, OrtSessionOptions* options, const OrtCUDAProviderOptionsV2* cuda_options) {
     return api->SessionOptionsAppendExecutionProvider_CUDA_V2(options, cuda_options);
 }

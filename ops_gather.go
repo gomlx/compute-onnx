@@ -38,6 +38,7 @@ func (f *Function) Gather(
 	startIndicesShape := startIndicesNode.shape
 	Q := startIndicesShape.Rank()
 
+
 	// 1. Prepare indices to move the indexVectorAxis to the last axis.
 	var indicesNode *Node
 	if indexVectorAxis == Q {

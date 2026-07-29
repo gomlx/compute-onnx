@@ -25,7 +25,8 @@ type ortTensorWrapper interface {
 }
 
 type typedTensor[T ort.TensorData] struct {
-	tensor *ort.Tensor[T]
+	tensor  *ort.Tensor[T]
+	rawData any
 }
 
 func (t *typedTensor[T]) GetShape() ort.Shape {
@@ -246,67 +247,67 @@ func newOrtTensorWrapper(shape shapes.Shape, flat any) (ortTensorWrapper, error)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[float32]{tensor: t}, nil
+		return &typedTensor[float32]{tensor: t, rawData: f}, nil
 	case []float64:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[float64]{tensor: t}, nil
+		return &typedTensor[float64]{tensor: t, rawData: f}, nil
 	case []int32:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[int32]{tensor: t}, nil
+		return &typedTensor[int32]{tensor: t, rawData: f}, nil
 	case []int64:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[int64]{tensor: t}, nil
+		return &typedTensor[int64]{tensor: t, rawData: f}, nil
 	case []bool:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[bool]{tensor: t}, nil
+		return &typedTensor[bool]{tensor: t, rawData: f}, nil
 	case []int8:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[int8]{tensor: t}, nil
+		return &typedTensor[int8]{tensor: t, rawData: f}, nil
 	case []uint8:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[uint8]{tensor: t}, nil
+		return &typedTensor[uint8]{tensor: t, rawData: f}, nil
 	case []int16:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[int16]{tensor: t}, nil
+		return &typedTensor[int16]{tensor: t, rawData: f}, nil
 	case []uint16:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[uint16]{tensor: t}, nil
+		return &typedTensor[uint16]{tensor: t, rawData: f}, nil
 	case []uint32:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[uint32]{tensor: t}, nil
+		return &typedTensor[uint32]{tensor: t, rawData: f}, nil
 	case []uint64:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &typedTensor[uint64]{tensor: t}, nil
+		return &typedTensor[uint64]{tensor: t, rawData: f}, nil
 	default:
 		return nil, errors.Errorf("unsupported type %T for onnxruntime tensor creation", flat)
 	}
