@@ -100,11 +100,24 @@ func initializeORT(cuda bool) error {
 }
 
 type Backend struct {
-	config       string
-	cuda         bool
-	logSeverity  int
-	capabilities compute.Capabilities
-	isFinalized  bool
+	config         string
+	cuda           bool
+	logSeverity    int
+	capabilities   compute.Capabilities
+	isFinalized    bool
+	keepModelProto bool
+}
+
+// SetKeepModelProto controls whether compiled Executable instances retain the graph *onnx.ModelProto.
+// When set to true, executables compiled by this backend store their ONNX ModelProto struct,
+// allowing the computation graph to be exported via SaveModel.
+func (b *Backend) SetKeepModelProto(keep bool) {
+	b.keepModelProto = keep
+}
+
+// KeepModelProto returns whether compiled Executable instances retain their graph *onnx.ModelProto.
+func (b *Backend) KeepModelProto() bool {
+	return b.keepModelProto
 }
 
 var _ compute.Backend = (*Backend)(nil)

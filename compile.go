@@ -3,6 +3,7 @@
 package onnxbackend
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"runtime"
@@ -110,7 +111,7 @@ func constantToTensorProto(name string, shape shapes.Shape, flat any) *onnx.Tens
 		DataType: int32(dt),
 		Dims:     onnxDims,
 		Name:     name,
-		RawData:  rawBytes,
+		RawData:  bytes.Clone(rawBytes),
 	}
 }
 
@@ -245,8 +246,11 @@ func (b *Builder) Compile() (compute.Executable, error) {
 		return nil, errors.Wrap(err, "failed to marshal ONNX ModelProto")
 	}
 
-	// Strategy A: Immediately release Go AST structs & backing slices and trigger GC
-	// before creating the ONNX Runtime session.
+	var savedModelProto *onnx.ModelProto
+	if b.backend.keepModelProto {
+		savedModelProto = model
+	}
+
 	model = nil
 	graph = nil
 	onnxNodes = nil
@@ -294,5 +298,5 @@ func (b *Builder) Compile() (compute.Executable, error) {
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime session")
 	}
 
-	return newExecutable(b.backend, session, inputNames, inputShapes, outputNames, outputShapes), nil
+	return newExecutable(b.backend, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto), nil
 }

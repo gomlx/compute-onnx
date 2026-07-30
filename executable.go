@@ -9,6 +9,7 @@ import (
 
 	"github.com/gomlx/compute"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
+	onnx "github.com/gomlx/compute-onnx/internal/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 	"github.com/gomlx/compute/support/humanize"
@@ -32,13 +33,16 @@ type Executable struct {
 
 	// Mutex to protect reusableWrappers for concurrent buffer finalization.
 	mu sync.Mutex
+
+	modelProto *onnx.ModelProto
 }
 
 var _ compute.Executable = (*Executable)(nil)
 
 func newExecutable(backend *Backend, session *ort.DynamicAdvancedSession,
 	inputNames []string, inputShapes []shapes.Shape,
-	outputNames []string, outputShapes []shapes.Shape) *Executable {
+	outputNames []string, outputShapes []shapes.Shape,
+	modelProto *onnx.ModelProto) *Executable {
 
 	nInputs := len(inputNames)
 	nOutputs := len(outputShapes)
@@ -53,7 +57,13 @@ func newExecutable(backend *Backend, session *ort.DynamicAdvancedSession,
 		cachedOrtInputs:  make([]ort.Value, nInputs),
 		cachedOutWraps:   make([]ortTensorWrapper, nOutputs),
 		cachedOrtOutputs: make([]ort.Value, nOutputs),
+		modelProto:       modelProto,
 	}
+}
+
+// ModelProto returns the ONNX ModelProto struct if Backend.KeepModelProto was enabled during compilation, or nil otherwise.
+func (e *Executable) ModelProto() *onnx.ModelProto {
+	return e.modelProto
 }
 
 func (e *Executable) Finalize() {
