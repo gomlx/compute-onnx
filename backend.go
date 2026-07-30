@@ -11,11 +11,11 @@ import (
 	"sync"
 
 	"github.com/gomlx/compute"
+	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"github.com/gomlx/compute-onnx/support/onnxruntime"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
-	ort "github.com/gomlx/compute-onnx/internal/ort"
 )
 
 const (
@@ -99,6 +99,7 @@ func initializeORT(cuda bool) error {
 	return nil
 }
 
+// Backend represents a ONNX Runtime backed [compute.Backend].
 type Backend struct {
 	config         string
 	cuda           bool
@@ -300,8 +301,6 @@ func (b *Backend) bufferFromFlatDataCPU(deviceNum compute.DeviceNum, flat any, s
 		isShared: true,
 	}, nil
 }
-
-
 
 func (b *Backend) HasSharedBuffers() bool {
 	return !b.cuda
