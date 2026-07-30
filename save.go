@@ -7,6 +7,10 @@ import (
 	"io"
 
 	"github.com/gomlx/compute"
+	ort "github.com/gomlx/compute-onnx/internal/ort"
+	onnx "github.com/gomlx/compute-onnx/internal/protos"
+	"github.com/gomlx/compute/dtypes"
+	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
 )
@@ -107,4 +111,157 @@ func SaveModel(backend compute.Backend, executable compute.Executable, w io.Writ
 	}
 
 	return nil
+}
+
+// LoadModel loads an ONNX model from an io.Reader and compiles it into a runnable compute.Executable.
+// It parses input and output tensor shapes and data types directly from the ONNX ModelProto
+// and creates an ONNX Runtime session ready for execution.
+func LoadModel(backend compute.Backend, r io.Reader) (compute.Executable, error) {
+	onBackend, ok := backend.(*Backend)
+	if !ok {
+		return nil, errors.New("LoadModel: backend is not an ONNX backend (*onnxbackend.Backend)")
+	}
+
+	modelBytes, err := io.ReadAll(r)
+	if err != nil {
+		return nil, errors.Wrap(err, "LoadModel: failed to read model bytes")
+	}
+
+	modelProto := &onnx.ModelProto{}
+	err = proto.Unmarshal(modelBytes, modelProto)
+	if err != nil {
+		return nil, errors.Wrap(err, "LoadModel: failed to unmarshal ONNX ModelProto")
+	}
+
+	if modelProto.Graph == nil {
+		return nil, errors.New("LoadModel: invalid ONNX model proto (nil Graph)")
+	}
+
+	graph := modelProto.Graph
+
+	// Build map of initializers to filter out initializer names from inputs
+	initializers := make(map[string]bool, len(graph.Initializer))
+	for _, init := range graph.Initializer {
+		initializers[init.Name] = true
+	}
+
+	var inputNames []string
+	var inputShapes []shapes.Shape
+	for _, valInfo := range graph.Input {
+		if initializers[valInfo.Name] {
+			continue // Skip initializers declared in graph inputs
+		}
+		name := valInfo.Name
+		shape := onnxValueInfoToShape(valInfo)
+		inputNames = append(inputNames, name)
+		inputShapes = append(inputShapes, shape)
+	}
+
+	var outputNames []string
+	var outputShapes []shapes.Shape
+	for _, valInfo := range graph.Output {
+		name := valInfo.Name
+		shape := onnxValueInfoToShape(valInfo)
+		outputNames = append(outputNames, name)
+		outputShapes = append(outputShapes, shape)
+	}
+
+	var options *ort.SessionOptions
+	if options, err = ort.NewSessionOptions(); err != nil {
+		return nil, errors.Wrap(err, "LoadModel: failed to create ONNX Runtime SessionOptions")
+	}
+	defer options.Destroy()
+
+	if onBackend.cuda {
+		cudaOpts, err := ort.NewCUDAProviderOptions()
+		if err != nil {
+			return nil, errors.Wrap(err, "LoadModel: failed to create ONNX Runtime CUDAProviderOptions")
+		}
+		defer cudaOpts.Destroy()
+
+		_ = cudaOpts.Update(map[string]string{
+			"do_copy_in_default_stream": "1",
+		})
+
+		err = options.AppendExecutionProviderCUDA(cudaOpts)
+		if err != nil {
+			return nil, errors.Wrap(err, "LoadModel: failed to append CUDA execution provider to SessionOptions")
+		}
+	}
+
+	logSev := onBackend.logSeverity
+	if logSev < 0 {
+		logSev = 3 // ORT_LOGGING_LEVEL_ERROR by default
+	}
+	err = options.SetSessionLogSeverityLevel(logSev)
+	if err != nil {
+		return nil, errors.Wrap(err, "LoadModel: failed to set ONNX Runtime session log severity level")
+	}
+
+	session, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inputNames, outputNames, options)
+	if err != nil {
+		return nil, errors.Wrap(err, "LoadModel: failed to create ONNX Runtime session")
+	}
+
+	var savedModelProto *onnx.ModelProto
+	if onBackend.keepModelProto {
+		savedModelProto = modelProto
+	}
+
+	return newExecutable(onBackend, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto), nil
+}
+
+func onnxValueInfoToShape(valInfo *onnx.ValueInfoProto) shapes.Shape {
+	if valInfo == nil || valInfo.Type == nil {
+		return shapes.Invalid()
+	}
+	tensorType := valInfo.Type.GetTensorType()
+	if tensorType == nil {
+		return shapes.Invalid()
+	}
+
+	dtype := onnxDTypeToGoMLX(onnx.TensorProto_DataType(tensorType.ElemType))
+
+	var dims []int
+	if tensorType.Shape != nil {
+		dims = make([]int, len(tensorType.Shape.Dim))
+		for i, d := range tensorType.Shape.Dim {
+			if d.GetDimValue() > 0 {
+				dims[i] = int(d.GetDimValue())
+			} else {
+				dims[i] = shapes.DynamicDim
+			}
+		}
+	}
+
+	return shapes.Make(dtype, dims...)
+}
+
+func onnxDTypeToGoMLX(dt onnx.TensorProto_DataType) dtypes.DType {
+	switch dt {
+	case onnx.TensorProto_FLOAT:
+		return dtypes.Float32
+	case onnx.TensorProto_DOUBLE:
+		return dtypes.Float64
+	case onnx.TensorProto_INT32:
+		return dtypes.Int32
+	case onnx.TensorProto_INT64:
+		return dtypes.Int64
+	case onnx.TensorProto_BOOL:
+		return dtypes.Bool
+	case onnx.TensorProto_INT8:
+		return dtypes.Int8
+	case onnx.TensorProto_UINT8:
+		return dtypes.Uint8
+	case onnx.TensorProto_INT16:
+		return dtypes.Int16
+	case onnx.TensorProto_UINT16:
+		return dtypes.Uint16
+	case onnx.TensorProto_UINT32:
+		return dtypes.Uint32
+	case onnx.TensorProto_UINT64:
+		return dtypes.Uint64
+	default:
+		return dtypes.InvalidDType
+	}
 }
