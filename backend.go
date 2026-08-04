@@ -263,6 +263,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		Operations:                  getSupportedOps(),
 		DTypes:                      make(map[dtypes.DType]bool),
 		PreferConstantsForVariables: true,
+		DynamicAxes:                 true,
 	}
 	caps.DTypes[dtypes.Float32] = true
 	caps.DTypes[dtypes.Float64] = true

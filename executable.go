@@ -289,16 +289,28 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 
 	outBuffers := make([]compute.Buffer, len(e.outputShapes))
 	for i, sh := range e.outputShapes {
-		ortShape := ort.NewShape(toInt64s(sh.Dimensions)...)
 		val := ort.WrapRawOrtValue(outputValues[i])
+		actualShape := sh
+		if sh.IsDynamic() {
+			boundShape, err := ort.GetOrtValueShape(outputValues[i])
+			if err != nil {
+				return nil, errors.Wrapf(err, "failed to get shape for output %d", i)
+			}
+			concreteDims := make([]int, len(boundShape))
+			for k, dim := range boundShape {
+				concreteDims[k] = int(dim)
+			}
+			actualShape.Dimensions = concreteDims
+		}
+		ortShape := ort.NewShape(toInt64s(actualShape.Dimensions)...)
 		outBuffers[i] = &Buffer{
 			backend: e.backend,
 			wrapper: &gpuTensorWrapper{
 				val:   val,
 				shape: ortShape,
-				dtype: sh.DType,
+				dtype: actualShape.DType,
 			},
-			shape:  sh,
+			shape:  actualShape,
 			device: defaultDevice,
 			isCUDA: true,
 		}
@@ -325,6 +337,10 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 	ortOutputs := e.cachedOrtOutputs
 
 	for i, sh := range e.outputShapes {
+		if sh.IsDynamic() {
+			outWrappers[i] = nil
+			continue
+		}
 		matchedIdx := -1
 		for idx, rw := range e.reusableWrappers {
 			if wrapperMatchesShape(rw, sh) {
@@ -347,6 +363,10 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 
 	// Allocate any output wrappers that weren't found in pool (outside lock).
 	for i, sh := range e.outputShapes {
+		if sh.IsDynamic() {
+			ortOutputs[i] = nil
+			continue
+		}
 		if outWrappers[i] == nil {
 			var err error
 			outWrappers[i], err = newEmptyOrtTensorWrapper(sh)
@@ -388,6 +408,21 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 	// Must allocate fresh slice each call since it escapes to the caller.
 	outBuffers := make([]compute.Buffer, len(e.outputShapes))
 	for i, sh := range e.outputShapes {
+		actualShape := sh
+		if sh.IsDynamic() {
+			var err error
+			outWrappers[i], err = wrapOrtValue(ortOutputs[i], sh)
+			if err != nil {
+				return nil, err
+			}
+			actualOrtShape := outWrappers[i].GetShape()
+			concreteDims := make([]int, len(actualOrtShape))
+			for k, dim := range actualOrtShape {
+				concreteDims[k] = int(dim)
+			}
+			actualShape.Dimensions = concreteDims
+		}
+
 		execBackpointer := e
 		if e.backend.cuda {
 			execBackpointer = nil // Don't recycle wrappers on CUDA; destroy them on Finalize
@@ -395,7 +430,7 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 		outBuffers[i] = &Buffer{
 			backend:    e.backend,
 			wrapper:    outWrappers[i],
-			shape:      sh,
+			shape:      actualShape,
 			device:     defaultDevice,
 			isShared:   true,
 			executable: execBackpointer,

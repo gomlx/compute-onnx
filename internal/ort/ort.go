@@ -814,6 +814,34 @@ func (s *DynamicAdvancedSession) Run(inputs []Value, outputs []Value) error {
 	return nil
 }
 
+func GetOrtValueShape(v *C.OrtValue) (Shape, error) {
+	if v == nil {
+		return nil, fmt.Errorf("GetOrtValueShape received nil pointer")
+	}
+
+	var info *C.OrtTensorTypeAndShapeInfo
+	status := C.wrapper_GetTensorTypeAndShape(ortApi, v, &info)
+	if err := statusToError(status); err != nil {
+		return nil, err
+	}
+	defer C.wrapper_ReleaseTensorTypeAndShapeInfo(ortApi, info)
+
+	var dimCount C.size_t
+	status = C.wrapper_GetDimensionsCount(ortApi, info, &dimCount)
+	if err := statusToError(status); err != nil {
+		return nil, err
+	}
+
+	shape := make([]int64, dimCount)
+	if dimCount > 0 {
+		status = C.wrapper_GetDimensions(ortApi, info, (*C.int64_t)(unsafe.Pointer(&shape[0])), dimCount)
+		if err := statusToError(status); err != nil {
+			return nil, err
+		}
+	}
+	return shape, nil
+}
+
 func createGoValueFromOrtValue(v *C.OrtValue) (Value, error) {
 	if v == nil {
 		return nil, fmt.Errorf("createGoValueFromOrtValue received nil pointer")

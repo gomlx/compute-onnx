@@ -3,8 +3,6 @@
 package onnxbackend
 
 import (
-	"fmt"
-
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/shapeinference"
 	"github.com/pkg/errors"
@@ -66,6 +64,9 @@ func init() {
 	registerOp(compute.OpTypeIdentity)
 	registerOp(compute.OpTypeWhere)
 	registerOp(compute.OpTypeReshape)
+	registerOp(compute.OpTypeDynamicShape)
+	registerOp(compute.OpTypeDynamicReshape)
+	registerOp(compute.OpTypeDynamicDimensionSize)
 	registerOp(compute.OpTypeReverse)
 	registerOp(compute.OpTypeTranspose)
 	registerOp(compute.OpTypeBroadcastInDim)
@@ -110,15 +111,12 @@ func (f *Function) addBinaryOp(opType compute.OpType, onnxOpType string, lhs, rh
 		return nil, err
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: onnxOpType,
 		inputs: []*Node{lhsNode, rhsNode},
 		shape:  outShape,
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
 
 func (f *Function) addComparisonOp(opType compute.OpType, onnxOpType string, lhs, rhs compute.Value) (compute.Value, error) {
@@ -133,15 +131,12 @@ func (f *Function) addComparisonOp(opType compute.OpType, onnxOpType string, lhs
 		return nil, err
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: onnxOpType,
 		inputs: []*Node{lhsNode, rhsNode},
 		shape:  outShape,
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
 
 func (f *Function) addUnaryOp(opType compute.OpType, onnxOpType string, x compute.Value) (compute.Value, error) {
@@ -155,13 +150,10 @@ func (f *Function) addUnaryOp(opType compute.OpType, onnxOpType string, x comput
 		return nil, err
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: onnxOpType,
 		inputs: []*Node{xNode},
 		shape:  outShape,
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }

@@ -3,7 +3,6 @@
 package onnxbackend
 
 import (
-	"fmt"
 	"math"
 
 	"github.com/gomlx/compute"
@@ -23,9 +22,7 @@ func (f *Function) ConvertDType(operand compute.Value, targetDType dtypes.DType)
 	outShape := xNode.shape
 	outShape.DType = targetDType
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: "Cast",
 		inputs: []*Node{xNode},
 		shape:  outShape,
@@ -37,8 +34,7 @@ func (f *Function) ConvertDType(operand compute.Value, targetDType dtypes.DType)
 			},
 		},
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
 
 func (f *Function) Where(condition compute.Value, onTrue compute.Value, onFalse compute.Value) (compute.Value, error) {
@@ -54,15 +50,12 @@ func (f *Function) Where(condition compute.Value, onTrue compute.Value, onFalse 
 		return nil, err
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: "Where",
 		inputs: []*Node{condNode, onTrueNode, onFalseNode},
 		shape:  outShape,
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
 
 func (f *Function) Reshape(x compute.Value, newDimensions ...int) (compute.Value, error) {
@@ -86,15 +79,19 @@ func (f *Function) Reshape(x compute.Value, newDimensions ...int) (compute.Value
 		return nil, err
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: "Reshape",
 		inputs: []*Node{xNode, shapeConstNode.(*Node)},
 		shape:  outShape,
+		attributes: []*onnx.AttributeProto{
+			{
+				Name: "allowzero",
+				Type: onnx.AttributeProto_INT,
+				I:    1,
+			},
+		},
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
 
 func (f *Function) Transpose(x compute.Value, permutation ...int) (compute.Value, error) {
@@ -113,9 +110,7 @@ func (f *Function) Transpose(x compute.Value, permutation ...int) (compute.Value
 		perm64[i] = int64(p)
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: "Transpose",
 		inputs: []*Node{xNode},
 		shape:  outShape,
@@ -127,8 +122,7 @@ func (f *Function) Transpose(x compute.Value, permutation ...int) (compute.Value
 			},
 		},
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
 
 func (f *Function) BroadcastInDim(x compute.Value, outputShape shapes.Shape, broadcastAxes []int) (compute.Value, error) {
@@ -159,15 +153,12 @@ func (f *Function) BroadcastInDim(x compute.Value, outputShape shapes.Shape, bro
 		return nil, err
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: "Expand",
 		inputs: []*Node{reshaped.(*Node), targetDimsConst.(*Node)},
 		shape:  outputShape,
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
 
 func (f *Function) Concatenate(axis int, inputs ...compute.Value) (compute.Value, error) {
@@ -187,9 +178,7 @@ func (f *Function) Concatenate(axis int, inputs ...compute.Value) (compute.Value
 		return nil, err
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: "Concat",
 		inputs: nodeInputs,
 		shape:  outShape,
@@ -201,8 +190,7 @@ func (f *Function) Concatenate(axis int, inputs ...compute.Value) (compute.Value
 			},
 		},
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
 
 func (f *Function) Slice(x compute.Value, start []int, limit []int, stride []int) (compute.Value, error) {
@@ -246,15 +234,12 @@ func (f *Function) Slice(x compute.Value, start []int, limit []int, stride []int
 		return nil, err
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: "Slice",
 		inputs: []*Node{xNode, startsConst.(*Node), endsConst.(*Node), axesConst.(*Node), stepsConst.(*Node)},
 		shape:  outShape,
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
 
 func (f *Function) Reverse(x compute.Value, axes ...int) (compute.Value, error) {
@@ -296,13 +281,157 @@ func (f *Function) Reverse(x compute.Value, axes ...int) (compute.Value, error) 
 		return nil, err
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: "Slice",
 		inputs: []*Node{xNode, startsConst.(*Node), endsConst.(*Node), axesConst.(*Node), stepsConst.(*Node)},
 		shape:  xNode.shape,
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
+}
+
+func (f *Function) DynamicShape(operand compute.Value) (compute.Value, error) {
+	xNode, ok := operand.(*Node)
+	if !ok {
+		return nil, errors.New("input must be a valid onnxruntime node")
+	}
+
+	rank := xNode.shape.Rank()
+
+	if !xNode.shape.IsDynamic() {
+		dims32 := make([]int32, rank)
+		for i, d := range xNode.shape.Dimensions {
+			dims32[i] = int32(d)
+		}
+		return f.Constant(dims32, rank)
+	}
+
+	shape64 := shapes.Make(dtypes.Int64, rank)
+	shapeNode64 := f.addNode(&Node{
+		opType: "Shape",
+		inputs: []*Node{xNode},
+		shape:  shape64,
+	})
+
+	return f.ConvertDType(shapeNode64, dtypes.Int32)
+}
+
+func (f *Function) DynamicDimensionSize(operand compute.Value, axis int) (compute.Value, error) {
+	xNode, ok := operand.(*Node)
+	if !ok {
+		return nil, errors.New("input must be a valid onnxruntime node")
+	}
+
+	rank := xNode.shape.Rank()
+	if axis < 0 || axis >= rank {
+		return nil, errors.Errorf("axis %d out of bounds for rank %d", axis, rank)
+	}
+
+	if !xNode.shape.IsDynamic() || xNode.shape.Dimensions[axis] != shapes.DynamicDim {
+		return f.Constant([]int32{int32(xNode.shape.Dimensions[axis])})
+	}
+
+	dynShape, err := f.DynamicShape(xNode)
+	if err != nil {
+		return nil, err
+	}
+
+	sliced, err := f.Slice(dynShape, []int{axis}, []int{axis + 1}, []int{1})
+	if err != nil {
+		return nil, err
+	}
+
+	return f.Reshape(sliced)
+}
+
+func (f *Function) DynamicReshape(operand compute.Value, dimensions ...compute.DynamicDimensionSpec) (compute.Value, error) {
+	xNode, ok := operand.(*Node)
+	if !ok {
+		return nil, errors.New("input must be a valid onnxruntime node")
+	}
+
+	outShape, err := shapeinference.DynamicReshape(xNode.shape, dimensions)
+	if err != nil {
+		return nil, err
+	}
+
+	hasDynamicValue := false
+	for _, spec := range dimensions {
+		if spec.Value != nil {
+			hasDynamicValue = true
+			break
+		}
+	}
+
+	if !outShape.IsDynamic() && !hasDynamicValue {
+		return f.Reshape(xNode, outShape.Dimensions...)
+	}
+
+	parts := make([]compute.Value, len(dimensions))
+	for i, spec := range dimensions {
+		if spec.Name != "" && spec.Value == nil {
+			constNode, err := f.Constant([]int64{-1}, 1)
+			if err != nil {
+				return nil, err
+			}
+			parts[i] = constNode
+		} else if spec.Value != nil {
+			valNode, ok := spec.Value.(*Node)
+			if !ok {
+				return nil, errors.New("dimension spec Value is not a valid onnxruntime node")
+			}
+			v := compute.Value(valNode)
+			if valNode.shape.Rank() == 0 {
+				var err error
+				v, err = f.Reshape(v, 1)
+				if err != nil {
+					return nil, err
+				}
+			}
+			currNode := v.(*Node)
+			if currNode.shape.DType != dtypes.Int64 {
+				var err error
+				v, err = f.ConvertDType(v, dtypes.Int64)
+				if err != nil {
+					return nil, err
+				}
+			}
+			parts[i] = v
+		} else {
+			constNode, err := f.Constant([]int64{int64(spec.Static)}, 1)
+			if err != nil {
+				return nil, err
+			}
+			parts[i] = constNode
+		}
+	}
+
+	var shapeTensorNode compute.Value
+	if len(parts) == 1 {
+		shapeTensorNode = parts[0]
+	} else {
+		var err error
+		shapeTensorNode, err = f.Concatenate(0, parts...)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	shapeNode, ok := shapeTensorNode.(*Node)
+	if !ok {
+		return nil, errors.New("shape tensor is not a valid onnxruntime node")
+	}
+
+	node := &Node{
+		opType: "Reshape",
+		inputs: []*Node{xNode, shapeNode},
+		shape:  outShape,
+		attributes: []*onnx.AttributeProto{
+			{
+				Name: "allowzero",
+				Type: onnx.AttributeProto_INT,
+				I:    1,
+			},
+		},
+	}
+	return f.addNode(node), nil
 }

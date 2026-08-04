@@ -16,6 +16,29 @@ func init() {
 	registerOp(compute.OpTypeGather)
 }
 
+func makeShape(dtype dtypes.DType, dims []int, axisNames []string) shapes.Shape {
+	isDynamic := false
+	for _, d := range dims {
+		if d == shapes.DynamicDim {
+			isDynamic = true
+			break
+		}
+	}
+	if isDynamic {
+		newNames := make([]string, len(dims))
+		if len(axisNames) == len(dims) {
+			copy(newNames, axisNames)
+		}
+		for i, d := range dims {
+			if d == shapes.DynamicDim && newNames[i] == "" {
+				newNames[i] = fmt.Sprintf("axis_%d", i)
+			}
+		}
+		return shapes.MakeDynamic(dtype, dims, newNames)
+	}
+	return shapes.Make(dtype, dims...)
+}
+
 // Gather gathers slices from operand using coordinates specified by startIndices.
 // It maps the generalized XLA Gather semantics to ONNX GatherND, Reshape, and Transpose.
 func (f *Function) Gather(
@@ -107,11 +130,16 @@ func (f *Function) Gather(
 	gatherNDDims := make([]int, gatherNDRank)
 	copy(gatherNDDims, indicesNode.shape.Dimensions[:K])
 	copy(gatherNDDims[K:], transposedOperand.shape.Dimensions[V:])
-	gatherNDShape := shapes.Make(operandShape.DType, gatherNDDims...)
+	axisNames := make([]string, gatherNDRank)
+	if indicesNode.shape.AxisNames != nil {
+		copy(axisNames, indicesNode.shape.AxisNames[:K])
+	}
+	if transposedOperand.shape.AxisNames != nil {
+		copy(axisNames[K:], transposedOperand.shape.AxisNames[V:])
+	}
+	gatherNDShape := makeShape(operandShape.DType, gatherNDDims, axisNames)
 
-	f.nodeCount++
-	gatherNDNode := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
+	gatherNDNode := f.addNode(&Node{
 		opType: "GatherND",
 		inputs: []*Node{transposedOperand, indicesNode},
 		shape:  gatherNDShape,
@@ -122,8 +150,7 @@ func (f *Function) Gather(
 				I:    0,
 			},
 		},
-	}
-	f.nodes = append(f.nodes, gatherNDNode)
+	})
 
 	// 4. Apply unmapped slicing if needed (if sliceSizes[u] < operandShape.Dimensions[u]).
 	for idx, u := range unmapped {
@@ -165,9 +192,54 @@ func (f *Function) Gather(
 	reshapedDims := make([]int, len(B)+len(O))
 	copy(reshapedDims, B)
 	copy(reshapedDims[len(B):], O)
-	reshapedVal, err := f.Reshape(gatherNDNode, reshapedDims...)
-	if err != nil {
-		return nil, errors.Wrap(err, "Gather: failed to reshape GatherND output to B+O shape")
+
+	var reshapedVal compute.Value
+	isReshapeDynamic := false
+	for _, d := range reshapedDims {
+		if d == shapes.DynamicDim {
+			isReshapeDynamic = true
+			break
+		}
+	}
+
+	if isReshapeDynamic {
+		specs := make([]compute.DynamicDimensionSpec, len(reshapedDims))
+		for i := 0; i < len(B); i++ {
+			if B[i] == shapes.DynamicDim {
+				dimSize, err := f.DynamicDimensionSize(indicesNode, i)
+				if err != nil {
+					return nil, errors.Wrap(err, "Gather: failed to get dynamic dimension size for batch axis")
+				}
+				name := indicesNode.shape.AxisName(i)
+				specs[i] = compute.DynamicDimensionSpec{Name: name, Value: dimSize}
+			} else {
+				specs[i] = compute.DynamicDimensionSpec{Static: B[i]}
+			}
+		}
+		for i := 0; i < len(O); i++ {
+			dimIdx := len(B) + i
+			if O[i] == shapes.DynamicDim {
+				dimSize, err := f.DynamicDimensionSize(gatherNDNode, K+i)
+				if err != nil {
+					return nil, errors.Wrap(err, "Gather: failed to get dynamic dimension size for slice axis")
+				}
+				name := gatherNDNode.shape.AxisName(K + i)
+				specs[dimIdx] = compute.DynamicDimensionSpec{Name: name, Value: dimSize}
+			} else {
+				specs[dimIdx] = compute.DynamicDimensionSpec{Static: O[i]}
+			}
+		}
+		var err error
+		reshapedVal, err = f.DynamicReshape(gatherNDNode, specs...)
+		if err != nil {
+			return nil, errors.Wrap(err, "Gather: failed to dynamic reshape GatherND output")
+		}
+	} else {
+		var err error
+		reshapedVal, err = f.Reshape(gatherNDNode, reshapedDims...)
+		if err != nil {
+			return nil, errors.Wrap(err, "Gather: failed to reshape GatherND output to B+O shape")
+		}
 	}
 	reshapedNode := reshapedVal.(*Node)
 
