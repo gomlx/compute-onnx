@@ -212,7 +212,11 @@ func (f *Function) Slice(x compute.Value, start []int, limit []int, stride []int
 
 	for i := 0; i < rank; i++ {
 		starts64[i] = int64(start[i])
-		ends64[i] = int64(limit[i])
+		if limit[i] == shapes.DynamicDim || (xNode.shape.Dimensions[i] == shapes.DynamicDim && limit[i] <= 0) {
+			ends64[i] = math.MaxInt64
+		} else {
+			ends64[i] = int64(limit[i])
+		}
 		axes64[i] = int64(i)
 		steps64[i] = int64(stride[i])
 	}
