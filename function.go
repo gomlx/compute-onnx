@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/gomlx/compute"
-	onnx "github.com/gomlx/compute-onnx/internal/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/notimplemented"
 	"github.com/gomlx/compute/shapes"
@@ -17,14 +16,14 @@ import (
 
 type Function struct {
 	notimplemented.Function
-	name      string
-	builder   *Builder
-	parent    *Function
-	params    []*Node
-	nodes     []*Node
-	returns   []*Node
-	nodeCount int
-	nodeCache map[string]*Node
+	name       string
+	builder    *Builder
+	parent     *Function
+	params     []*Node
+	nodes      []*Node
+	returns    []*Node
+	nodeCount  int
+	constCache map[string]*Node
 }
 
 var _ compute.Function = (*Function)(nil)
@@ -36,52 +35,13 @@ func NewFunction(name string, builder *Builder) *Function {
 				return errors.Wrapf(compute.ErrNotImplemented, "%s (%d) not implemented for ONNX Runtime backend", op, op)
 			},
 		},
-		name:      name,
-		builder:   builder,
-		nodeCache: make(map[string]*Node),
+		name:       name,
+		builder:    builder,
+		constCache: make(map[string]*Node),
 	}
-}
-
-func formatAttribute(attr *onnx.AttributeProto) string {
-	if attr == nil {
-		return ""
-	}
-	return fmt.Sprintf("%s:%d:i=%d:f=%f:s=%s:is=%v:fs=%v;",
-		attr.Name, attr.Type, attr.I, attr.F, attr.S, attr.Ints, attr.Floats)
-}
-
-func (f *Function) nodeCacheKey(node *Node) string {
-	var sb strings.Builder
-	sb.WriteString(node.opType)
-	sb.WriteByte('|')
-	sb.WriteString(node.domain)
-	sb.WriteByte('|')
-	sb.WriteString(node.shape.String())
-	sb.WriteByte('|')
-	for _, inp := range node.inputs {
-		fmt.Fprintf(&sb, "%p,", inp)
-	}
-	sb.WriteByte('|')
-	for _, attr := range node.attributes {
-		sb.WriteString(formatAttribute(attr))
-	}
-	sb.WriteByte('|')
-	if node.opType == "Constant" && node.flatValue != nil {
-		raw := dtypes.UnsafeByteSliceFromAny(node.flatValue)
-		sb.WriteString(string(raw))
-	}
-	return sb.String()
 }
 
 func (f *Function) addNode(node *Node) *Node {
-	if f.nodeCache == nil {
-		f.nodeCache = make(map[string]*Node)
-	}
-	key := f.nodeCacheKey(node)
-	if cached, ok := f.nodeCache[key]; ok {
-		return cached
-	}
-
 	f.nodeCount++
 	if node.name == "" {
 		if node.opType == "Constant" {
@@ -91,8 +51,44 @@ func (f *Function) addNode(node *Node) *Node {
 		}
 	}
 	f.nodes = append(f.nodes, node)
-	f.nodeCache[key] = node
 	return node
+}
+
+func (f *Function) constCacheKey(shape shapes.Shape, flat any) string {
+	var sb strings.Builder
+	sb.WriteString(shape.String())
+	sb.WriteByte('|')
+	if flat != nil {
+		raw := dtypes.UnsafeByteSliceFromAny(flat)
+		sb.Write(raw)
+	}
+	return sb.String()
+}
+
+func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
+	valType := reflect.TypeOf(flat)
+	if valType.Kind() != reflect.Slice && valType.Kind() != reflect.Array {
+		return nil, errors.Errorf("Constant expects flat to be a slice or array, got %T", flat)
+	}
+	dtype := dtypes.FromGoType(valType.Elem())
+	shape := shapes.Make(dtype, dims...)
+
+	key := f.constCacheKey(shape, flat)
+	if f.constCache == nil {
+		f.constCache = make(map[string]*Node)
+	}
+	if cached, ok := f.constCache[key]; ok {
+		return cached, nil
+	}
+
+	node := &Node{
+		opType:    "Constant",
+		shape:     shape,
+		flatValue: flat,
+	}
+	n := f.addNode(node)
+	f.constCache[key] = n
+	return n, nil
 }
 
 func (f *Function) Name() string {
@@ -133,20 +129,7 @@ func (f *Function) Parameter(name string, shape shapes.Shape, spec *compute.Shar
 	return node, nil
 }
 
-func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
-	valType := reflect.TypeOf(flat)
-	if valType.Kind() != reflect.Slice && valType.Kind() != reflect.Array {
-		return nil, errors.Errorf("Constant expects flat to be a slice or array, got %T", flat)
-	}
-	dtype := dtypes.FromGoType(valType.Elem())
-	shape := shapes.Make(dtype, dims...)
-	node := &Node{
-		opType:    "Constant",
-		shape:     shape,
-		flatValue: flat,
-	}
-	return f.addNode(node), nil
-}
+
 
 func (f *Function) Return(outputs []compute.Value, shardings []*compute.ShardingSpec) error {
 	f.returns = make([]*Node, len(outputs))

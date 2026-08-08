@@ -110,8 +110,8 @@ func TestDynamicOps(t *testing.T) {
 		require.Equal(t, []int{6}, outShape.Dimensions)
 	})
 
-	t.Run("NodeDeduplicationAndConstantCaching", func(t *testing.T) {
-		builder := backend.Builder("test_dedup")
+	t.Run("ConstantCaching", func(t *testing.T) {
+		builder := backend.Builder("test_const_cache")
 		fn := builder.Main().(*Function)
 
 		c1, err := fn.Constant([]int64{1, 2}, 2)
@@ -129,7 +129,7 @@ func TestDynamicOps(t *testing.T) {
 		add2, err := fn.Add(p, p)
 		require.NoError(t, err)
 
-		require.Same(t, add1, add2)
+		require.NotSame(t, add1, add2)
 	})
 
 	t.Run("SaveAndLoadDynamicModel", func(t *testing.T) {
