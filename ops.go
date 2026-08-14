@@ -72,6 +72,9 @@ func init() {
 	registerOp(compute.OpTypeBroadcastInDim)
 	registerOp(compute.OpTypeConcatenate)
 	registerOp(compute.OpTypeSlice)
+	registerOp(compute.OpTypeDynamicSlice)
+	registerOp(compute.OpTypeDynamicUpdateSlice)
+	registerOp(compute.OpTypePad)
 	registerOp(compute.OpTypeIota)
 
 	// Reductions
