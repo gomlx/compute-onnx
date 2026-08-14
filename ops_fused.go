@@ -10,6 +10,7 @@ import (
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
 	"github.com/gomlx/compute/dtypes/float16"
+	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
 
@@ -23,24 +24,91 @@ func init() {
 	registerOp(compute.OpTypeFusedQuantizedDense)
 }
 
-func expandRankToMatch(f *Function, val compute.Value, targetRank int) (compute.Value, error) {
+func broadcastToShape(f *Function, val compute.Value, targetShape shapes.Shape) (compute.Value, error) {
 	valNode, ok := val.(*Node)
 	if !ok {
-		return nil, errors.New("expandRankToMatch: val must be a valid onnxruntime node")
+		return nil, errors.New("broadcastToShape: val must be a valid onnxruntime node")
 	}
-	currentRank := valNode.shape.Rank()
-	if currentRank >= targetRank {
+	if valNode.shape.Equal(targetShape) {
 		return valNode, nil
 	}
-	diff := targetRank - currentRank
-	newDims := make([]int, targetRank)
-	for i := 0; i < diff; i++ {
-		newDims[i] = 1
+
+	targetRank := targetShape.Rank()
+	currentRank := valNode.shape.Rank()
+
+	currVal := valNode
+	if currentRank < targetRank {
+		diff := targetRank - currentRank
+		newDims := make([]int, targetRank)
+		for i := 0; i < diff; i++ {
+			newDims[i] = 1
+		}
+		for i := 0; i < currentRank; i++ {
+			newDims[diff+i] = valNode.shape.Dimensions[i]
+		}
+		reshaped, err := f.Reshape(valNode, newDims...)
+		if err != nil {
+			return nil, err
+		}
+		currVal = reshaped.(*Node)
 	}
-	for i := 0; i < currentRank; i++ {
-		newDims[diff+i] = valNode.shape.Dimensions[i]
+
+	if currVal.shape.Equal(targetShape) {
+		return currVal, nil
 	}
-	return f.Reshape(valNode, newDims...)
+
+	axes := make([]int, targetRank)
+	for i := 0; i < targetRank; i++ {
+		axes[i] = i
+	}
+	return f.BroadcastInDim(currVal, targetShape, axes)
+}
+
+func alignAttentionScoreTensor(f *Function, val compute.Value, axesLayout compute.AttentionAxesLayout, qBHSD *Node, targetShape shapes.Shape) (compute.Value, error) {
+	node, ok := val.(*Node)
+	if !ok {
+		return nil, errors.New("alignAttentionScoreTensor: val must be a valid onnxruntime node")
+	}
+
+	rank := node.shape.Rank()
+	targetRank := targetShape.Rank()
+	if targetRank != 4 {
+		return nil, errors.Errorf("alignAttentionScoreTensor: targetShape must be rank 4, got %d", targetRank)
+	}
+
+	var currNode *Node = node
+	if rank == 2 {
+		// [Sq, Skv] -> [1, 1, Sq, Skv]
+		reshaped, err := f.Reshape(node, 1, 1, node.shape.Dimensions[0], node.shape.Dimensions[1])
+		if err != nil {
+			return nil, err
+		}
+		currNode = reshaped.(*Node)
+	} else if rank == 3 {
+		// [B, Sq, Skv] -> [B, 1, Sq, Skv]
+		reshaped, err := f.Reshape(node, node.shape.Dimensions[0], 1, node.shape.Dimensions[1], node.shape.Dimensions[2])
+		if err != nil {
+			return nil, err
+		}
+		currNode = reshaped.(*Node)
+	} else if rank == 4 && axesLayout == compute.AttentionAxesLayoutBSHD {
+		// In BSHD mode, 4D tensor can be [B, Sq, H, Skv] (BSHD) or [B, H, Sq, Skv] (BHSD).
+		numHeadsQ := qBHSD.shape.Dimensions[1]
+		seqLenQ := qBHSD.shape.Dimensions[2]
+		d1 := node.shape.Dimensions[1]
+		d2 := node.shape.Dimensions[2]
+
+		// Transpose if it's in BSHD layout [B, Sq, H, Skv] (i.e. d1 matches Sq or d2 matches H)
+		if (d1 == seqLenQ || d1 == 1) && (d2 == numHeadsQ || d2 == 1) && !(d1 == numHeadsQ && d2 == seqLenQ) {
+			transposed, err := f.Transpose(node, 0, 2, 1, 3)
+			if err != nil {
+				return nil, err
+			}
+			currNode = transposed.(*Node)
+		}
+	}
+
+	return broadcastToShape(f, currNode, targetShape)
 }
 
 // FusedSoftmax computes softmax along the specified axis using ONNX Softmax.
@@ -241,7 +309,7 @@ func (f *Function) FusedDense(x, weight, bias compute.Value, options compute.Den
 			return nil, errors.New("FusedDense: bias must be a valid onnxruntime node")
 		}
 		dotNode := dotRes.(*Node)
-		biasReshaped, err := expandRankToMatch(f, biasNode, dotNode.shape.Rank())
+		biasReshaped, err := broadcastToShape(f, biasNode, dotNode.shape)
 		if err != nil {
 			return nil, errors.Wrap(err, "FusedDense: bias reshape failed")
 		}
@@ -308,10 +376,6 @@ func (f *Function) FusedScaledDotProductAttention(
 	if qNode.shape.Rank() != 4 || kNode.shape.Rank() != 4 || vNode.shape.Rank() != 4 {
 		return nil, nil, errors.Errorf("FusedScaledDotProductAttention: query, key, value must be 4D tensors, got ranks %d, %d, %d",
 			qNode.shape.Rank(), kNode.shape.Rank(), vNode.shape.Rank())
-	}
-
-	if options != nil && (options.QuerySeqLen != nil || options.KeyValueSeqLen != nil) {
-		return nil, nil, errors.Wrap(compute.ErrNotImplemented, "FusedScaledDotProductAttention: QuerySeqLen/KeyValueSeqLen not supported")
 	}
 
 	var qBHSD, kBHSD, vBHSD *Node
@@ -396,6 +460,98 @@ func (f *Function) FusedScaledDotProductAttention(
 		return nil, nil, err
 	}
 
+	// Apply QuerySeqLen and KeyValueSeqLen masking if provided
+	if options != nil && (options.QuerySeqLen != nil || options.KeyValueSeqLen != nil) {
+		seqLen := qBHSD.shape.Dimensions[2]
+		kvLen := kBHSD.shape.Dimensions[2]
+		batchSize := qBHSD.shape.Dimensions[0]
+
+		var seqLenMask compute.Value
+
+		if options.KeyValueSeqLen != nil {
+			kvLenNode, ok := options.KeyValueSeqLen.(*Node)
+			if !ok {
+				return nil, nil, errors.New("FusedScaledDotProductAttention: KeyValueSeqLen must be a valid onnxruntime node")
+			}
+			kvSeqIdx, err := f.Iota(shapes.Make(dtypes.Int32, 1, 1, 1, kvLen), 3)
+			if err != nil {
+				return nil, nil, err
+			}
+			kvLen32, err := f.ConvertDType(kvLenNode, dtypes.Int32)
+			if err != nil {
+				return nil, nil, err
+			}
+			kvLenReshaped, err := f.Reshape(kvLen32, batchSize, 1, 1, 1)
+			if err != nil {
+				return nil, nil, err
+			}
+			validKV, err := f.LessThan(kvSeqIdx, kvLenReshaped)
+			if err != nil {
+				return nil, nil, err
+			}
+			seqLenMask = validKV
+		}
+
+		if options.QuerySeqLen != nil {
+			qLenNode, ok := options.QuerySeqLen.(*Node)
+			if !ok {
+				return nil, nil, errors.New("FusedScaledDotProductAttention: QuerySeqLen must be a valid onnxruntime node")
+			}
+			qSeqIdx, err := f.Iota(shapes.Make(dtypes.Int32, 1, 1, seqLen, 1), 2)
+			if err != nil {
+				return nil, nil, err
+			}
+			qLen32, err := f.ConvertDType(qLenNode, dtypes.Int32)
+			if err != nil {
+				return nil, nil, err
+			}
+			qLenReshaped, err := f.Reshape(qLen32, batchSize, 1, 1, 1)
+			if err != nil {
+				return nil, nil, err
+			}
+			validQ, err := f.LessThan(qSeqIdx, qLenReshaped)
+			if err != nil {
+				return nil, nil, err
+			}
+			if seqLenMask != nil {
+				seqLenMask, err = f.LogicalAnd(seqLenMask, validQ)
+				if err != nil {
+					return nil, nil, err
+				}
+			} else {
+				seqLenMask = validQ
+			}
+		}
+
+		if seqLenMask != nil {
+			scoresNode := scoresVal.(*Node)
+			maskReshaped, err := broadcastToShape(f, seqLenMask, scoresNode.shape)
+			if err != nil {
+				return nil, nil, errors.Wrap(err, "FusedScaledDotProductAttention: seqLenMask reshape failed")
+			}
+			maskNode := maskReshaped.(*Node)
+
+			var negInfConst compute.Value
+			switch qNode.shape.DType {
+			case dtypes.Float32:
+				negInfConst, err = f.Constant([]float32{-1e9})
+			case dtypes.Float64:
+				negInfConst, err = f.Constant([]float64{-1e9})
+			case dtypes.Float16:
+				negInfConst, err = f.Constant([]float16.Float16{float16.FromFloat32(-10000.0)})
+			case dtypes.BFloat16:
+				negInfConst, err = f.Constant([]bfloat16.BFloat16{bfloat16.FromFloat32(-1e9)})
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			scoresVal, err = f.Where(maskNode, scoresVal, negInfConst)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
 	// Apply causal mask if requested
 	if options != nil && options.Causal {
 		seqLen := qBHSD.shape.Dimensions[2]
@@ -457,16 +613,12 @@ func (f *Function) FusedScaledDotProductAttention(
 
 	// Apply explicit mask if provided
 	if options != nil && options.Mask != nil {
-		mNode, ok := options.Mask.(*Node)
-		if !ok {
-			return nil, nil, errors.New("FusedScaledDotProductAttention: Mask must be a valid onnxruntime node")
-		}
 		scoresNode := scoresVal.(*Node)
-		maskReshaped, err := expandRankToMatch(f, mNode, scoresNode.shape.Rank())
+		maskAligned, err := alignAttentionScoreTensor(f, options.Mask, axesLayout, qBHSD, scoresNode.shape)
 		if err != nil {
-			return nil, nil, errors.Wrap(err, "FusedScaledDotProductAttention: mask reshape failed")
+			return nil, nil, errors.Wrap(err, "FusedScaledDotProductAttention: mask alignment failed")
 		}
-		maskNode := maskReshaped.(*Node)
+		maskNode := maskAligned.(*Node)
 
 		if maskNode.shape.DType == dtypes.Bool {
 			var negInfConst compute.Value
@@ -497,16 +649,12 @@ func (f *Function) FusedScaledDotProductAttention(
 
 	// Apply additive bias if provided
 	if options != nil && options.Bias != nil {
-		biasNode, ok := options.Bias.(*Node)
-		if !ok {
-			return nil, nil, errors.New("FusedScaledDotProductAttention: Bias must be a valid onnxruntime node")
-		}
 		scoresNode := scoresVal.(*Node)
-		biasReshaped, err := expandRankToMatch(f, biasNode, scoresNode.shape.Rank())
+		biasAligned, err := alignAttentionScoreTensor(f, options.Bias, axesLayout, qBHSD, scoresNode.shape)
 		if err != nil {
-			return nil, nil, errors.Wrap(err, "FusedScaledDotProductAttention: bias reshape failed")
+			return nil, nil, errors.Wrap(err, "FusedScaledDotProductAttention: bias alignment failed")
 		}
-		scoresVal, err = f.Add(scoresVal, biasReshaped)
+		scoresVal, err = f.Add(scoresVal, biasAligned)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -577,7 +725,7 @@ func (f *Function) FusedQuantizedDense(x, weights, bias compute.Value, weightsQu
 			return nil, errors.Wrap(err, "FusedQuantizedDense: converting zeroPoint to float32 failed")
 		}
 		wNode := wFloat.(*Node)
-		zpReshaped, err := expandRankToMatch(f, zpFloat, wNode.shape.Rank())
+		zpReshaped, err := broadcastToShape(f, zpFloat, wNode.shape)
 		if err != nil {
 			return nil, errors.Wrap(err, "FusedQuantizedDense: zeroPoint reshape failed")
 		}
@@ -594,7 +742,7 @@ func (f *Function) FusedQuantizedDense(x, weights, bias compute.Value, weightsQu
 			return nil, errors.Wrap(err, "FusedQuantizedDense: converting scale to float32 failed")
 		}
 		wNode := wFloat.(*Node)
-		scaleReshaped, err := expandRankToMatch(f, scaleFloat, wNode.shape.Rank())
+		scaleReshaped, err := broadcastToShape(f, scaleFloat, wNode.shape)
 		if err != nil {
 			return nil, errors.Wrap(err, "FusedQuantizedDense: scale reshape failed")
 		}
@@ -622,36 +770,47 @@ func (f *Function) FusedAttentionQKVProjection(
 	}
 
 	xRank := xNode.shape.Rank()
-	if xRank != 2 {
-		return nil, nil, nil, errors.Errorf("FusedAttentionQKVProjection: x must be 2D [batch, inFeatures], got rank %d", xRank)
+	if xRank < 2 {
+		return nil, nil, nil, errors.Errorf("FusedAttentionQKVProjection: x must be at least 2D [batch..., inFeatures], got rank %d", xRank)
 	}
 
-	// Compute matmul: y = x @ wQKV -> shape [batch, queryDim + 2*keyValueDim]
-	yVal, err := f.DotGeneral(xNode, []int{1}, nil, wNode, []int{0}, nil, compute.DotGeneralConfig{})
+	xShape := xNode.shape
+	inFeatures := xShape.Dimensions[xRank-1]
+	batchDims := xShape.Dimensions[:xRank-1]
+	flatBatch := 1
+	for _, d := range batchDims {
+		flatBatch *= d
+	}
+
+	var x2D *Node = xNode
+	if xRank > 2 {
+		xReshaped, err := f.Reshape(xNode, flatBatch, inFeatures)
+		if err != nil {
+			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: reshaping x to 2D failed")
+		}
+		x2D = xReshaped.(*Node)
+	}
+
+	// Compute matmul: y = x2D @ wQKV -> shape [flatBatch, queryDim + 2*keyValueDim]
+	yVal, err := f.DotGeneral(x2D, []int{1}, nil, wNode, []int{0}, nil, compute.DotGeneralConfig{})
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: matmul failed")
 	}
 
-	yNode, ok := yVal.(*Node)
-	if !ok {
-		return nil, nil, nil, errors.New("FusedAttentionQKVProjection: matmul output is not a valid onnxruntime node")
-	}
-
-	batchDim := yNode.shape.Dimensions[0]
 	totalDim := queryDim + 2*keyValueDim
 
 	// Slice Q, K, V along axis 1
-	qSlice, err := f.Slice(yVal, []int{0, 0}, []int{batchDim, queryDim}, []int{1, 1})
+	qSlice, err := f.Slice(yVal, []int{0, 0}, []int{flatBatch, queryDim}, []int{1, 1})
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: slicing Q failed")
 	}
 
-	kSlice, err := f.Slice(yVal, []int{0, queryDim}, []int{batchDim, queryDim + keyValueDim}, []int{1, 1})
+	kSlice, err := f.Slice(yVal, []int{0, queryDim}, []int{flatBatch, queryDim + keyValueDim}, []int{1, 1})
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: slicing K failed")
 	}
 
-	vSlice, err := f.Slice(yVal, []int{0, queryDim + keyValueDim}, []int{batchDim, totalDim}, []int{1, 1})
+	vSlice, err := f.Slice(yVal, []int{0, queryDim + keyValueDim}, []int{flatBatch, totalDim}, []int{1, 1})
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: slicing V failed")
 	}
@@ -664,7 +823,7 @@ func (f *Function) FusedAttentionQKVProjection(
 			return nil, nil, nil, errors.New("FusedAttentionQKVProjection: biasQ must be a valid onnxruntime node")
 		}
 		qNode := qSlice.(*Node)
-		bqReshaped, err := expandRankToMatch(f, bqNode, qNode.shape.Rank())
+		bqReshaped, err := broadcastToShape(f, bqNode, qNode.shape)
 		if err != nil {
 			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: biasQ reshape failed")
 		}
@@ -680,7 +839,7 @@ func (f *Function) FusedAttentionQKVProjection(
 			return nil, nil, nil, errors.New("FusedAttentionQKVProjection: biasK must be a valid onnxruntime node")
 		}
 		kNode := kSlice.(*Node)
-		bkReshaped, err := expandRankToMatch(f, bkNode, kNode.shape.Rank())
+		bkReshaped, err := broadcastToShape(f, bkNode, kNode.shape)
 		if err != nil {
 			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: biasK reshape failed")
 		}
@@ -696,13 +855,33 @@ func (f *Function) FusedAttentionQKVProjection(
 			return nil, nil, nil, errors.New("FusedAttentionQKVProjection: biasV must be a valid onnxruntime node")
 		}
 		vNode := vSlice.(*Node)
-		bvReshaped, err := expandRankToMatch(f, bvNode, vNode.shape.Rank())
+		bvReshaped, err := broadcastToShape(f, bvNode, vNode.shape)
 		if err != nil {
 			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: biasV reshape failed")
 		}
 		valueRes, err = f.Add(valueRes, bvReshaped)
 		if err != nil {
 			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: adding biasV failed")
+		}
+	}
+
+	// If x was higher rank (> 2), reshape Q, K, V back to [batchDims..., queryDim/keyValueDim]
+	if xRank > 2 {
+		qDims := append(append([]int(nil), batchDims...), queryDim)
+		kDims := append(append([]int(nil), batchDims...), keyValueDim)
+		vDims := append(append([]int(nil), batchDims...), keyValueDim)
+
+		queryRes, err = f.Reshape(queryRes, qDims...)
+		if err != nil {
+			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: reshaping Q back to original rank failed")
+		}
+		keyRes, err = f.Reshape(keyRes, kDims...)
+		if err != nil {
+			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: reshaping K back to original rank failed")
+		}
+		valueRes, err = f.Reshape(valueRes, vDims...)
+		if err != nil {
+			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: reshaping V back to original rank failed")
 		}
 	}
 

@@ -16,9 +16,9 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
 | `FusedGelu` | Standard ONNX `Gelu` (opset 20+) | **Supported** |
 | `FusedLayerNorm` | Standard ONNX `LayerNormalization` (opset 17+) | **Supported** (with trailing contiguous axes restriction) |
 | `FusedDense` | ONNX `MatMul` / `Einsum` + `Add` + Activation (`Relu`, `Gelu`, `Sigmoid`/`Mul`, `HardSwish`, `Tanh`) | **Supported** |
-| `FusedScaledDotProductAttention` | ONNX Graph / `Softmax( (Q @ K^T) * scale + mask + bias ) @ V` (Fused by ORT Session Optimizer) | **Supported** (Forward Pass) |
+| `FusedScaledDotProductAttention` | ONNX Graph / `Softmax( (Q @ K^T) * scale + mask + bias ) @ V` (Fused by ORT Session Optimizer) | **Supported** (Forward Pass with Causal, Masks, Biases, GQA, SeqLen) |
 | `FusedScaledDotProductAttentionVJP` | Direct backward gradient graph | **Not Implemented** (Falls back to decomposed VJP) |
-| `FusedAttentionQKVProjection` | ONNX `MatMul` + `Slice` (Q, K, V) + `Add` (bias) | **Supported** |
+| `FusedAttentionQKVProjection` | ONNX `MatMul` + `Slice` (Q, K, V) + `Add` (bias) | **Supported** (for 2D, 3D, 4D input ranks) |
 | `FusedQuantizedDense` | Dequantization (`ConvertDType`, `Sub`, `Mul`) + `FusedDense` | **Supported** (for `QuantLinear`) |
 | `QuantizedEmbeddingLookup` | Row gather with on-the-fly block dequantization | **Not Implemented** (GGML format unsupported in standard ONNX) |
 
@@ -83,10 +83,10 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
   - **Grouped Query Attention (GQA)**: Automatically expands Key and Value heads when `numHeadsKV < numHeadsQ`.
   - **Custom Scale**: Custom scale factor or default \(1 / \sqrt{\text{headDim}}\).
   - **Causal Masking**: Adds lower-triangular causal mask with large negative score offsets (`-1e9`).
-  - **Boolean / Float Attention Mask**: Full support for boolean masks (using ONNX `Where`) and additive score masks.
-  - **Attention Bias**: ALiBi / relative-position additive score bias.
+  - **Boolean / Float Attention Mask**: Full support for boolean masks (using ONNX `Where`) and additive score masks (with layout auto-alignment for 2D, 3D, and 4D masks).
+  - **Attention Bias**: ALiBi / relative-position additive score bias (supporting 2D, 3D, and 4D bias shapes).
+  - **Per-Batch Sequence Length Tensors (`QuerySeqLen` / `KeyValueSeqLen`)**: Supported via `Iota` + `LessThan` index sequence masking.
 - **Shortcomings & Limitations**:
-  - **Per-Batch Sequence Length Tensors (`QuerySeqLen` / `KeyValueSeqLen`)**: Explicit per-batch sequence length tensors are not supported in graph-level SDPA and will return `ErrNotImplemented`.
   - **Fused VJP (`FusedScaledDotProductAttentionVJP`)**: Fused backward pass returns `ErrNotImplemented`. GoMLX automatically uses decomposed attention for gradient calculation during training.
 
 ---
@@ -98,7 +98,7 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
       x, wQKV, biasQ, biasK, biasV Value,
       queryDim, keyValueDim int) (query, key, value Value, err error)
   ```
-- **ONNX Operator Mapping**: `DotGeneral` (`x @ wQKV`), ONNX `Slice` to split into Query, Key, and Value tensors, and optional ONNX `Add` for per-projection biases.
+- **ONNX Operator Mapping**: Handles inputs of rank \(N \ge 2\) (2D, 3D, 4D). Flattens leading dimensions into `[flatBatch, inFeatures]`, applies `DotGeneral` (`x @ wQKV`), ONNX `Slice` to split into Query, Key, and Value tensors, optional ONNX `Add` for per-projection biases, and reshapes outputs back to original leading dimensions `[batchDims..., queryDim/keyValueDim]`.
 
 ---
 

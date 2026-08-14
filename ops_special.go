@@ -153,10 +153,12 @@ func (f *Function) BroadcastInDim(x compute.Value, outputShape shapes.Shape, bro
 		return nil, err
 	}
 
+	outShape := outputShape
+	outShape.DType = xNode.shape.DType
 	node := &Node{
 		opType: "Expand",
 		inputs: []*Node{reshaped.(*Node), targetDimsConst.(*Node)},
-		shape:  outputShape,
+		shape:  outShape,
 	}
 	return f.addNode(node), nil
 }
