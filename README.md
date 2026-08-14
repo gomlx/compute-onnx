@@ -9,6 +9,8 @@ ONNX Runtime based compute backend for GoMLX.
 
 It allows GoMLX models to be executed via ONNX Runtime using either CPU or CUDA (NVIDIA GPU).
 
+It supports dynamic shapes and exporting models to `.onnx` files.
+
 ## Example Usage
 
 To run the Adult dataset demo with the ONNX backend:
@@ -41,6 +43,17 @@ Configuration can be specified in the `GOMLX_BACKEND` environment variable using
   ```bash
   GOMLX_BACKEND=onnx
   ```
+
+### Save Model To ONNX
+
+This allows one to export GOMLX trained (or fine-tuned) models to ONNX.
+
+See [an example in UCI-Adult demo](https://github.com/gomlx/gomlx/blob/main/examples/adult/demo/save_onnx.go). If you have a pre-trained file in a directory called `base`:
+
+```
+GOMLX_BACKEND=onnx go run -tags=onnx ./examples/adult/demo/ -checkpoint "base" -save_onnx="/tmp/a.onnx" -vmodule=save_onnx=1
+```
+
 
 ### Logging & Verbosity
 
