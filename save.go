@@ -223,17 +223,27 @@ func onnxValueInfoToShape(valInfo *onnx.ValueInfoProto) shapes.Shape {
 	dtype := onnxDTypeToGoMLX(onnx.TensorProto_DataType(tensorType.ElemType))
 
 	var dims []int
+	var axisNames []string
+	hasAxisNames := false
 	if tensorType.Shape != nil {
 		dims = make([]int, len(tensorType.Shape.Dim))
+		axisNames = make([]string, len(tensorType.Shape.Dim))
 		for i, d := range tensorType.Shape.Dim {
 			if d.GetDimValue() > 0 {
 				dims[i] = int(d.GetDimValue())
 			} else {
 				dims[i] = shapes.DynamicDim
+				if param := d.GetDimParam(); param != "" {
+					axisNames[i] = param
+					hasAxisNames = true
+				}
 			}
 		}
 	}
 
+	if hasAxisNames {
+		return shapes.MakeDynamic(dtype, dims, axisNames)
+	}
 	return shapes.Make(dtype, dims...)
 }
 

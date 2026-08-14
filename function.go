@@ -5,6 +5,7 @@ package onnxbackend
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/dtypes"
@@ -15,13 +16,14 @@ import (
 
 type Function struct {
 	notimplemented.Function
-	name      string
-	builder   *Builder
-	parent    *Function
-	params    []*Node
-	nodes     []*Node
-	returns   []*Node
-	nodeCount int
+	name       string
+	builder    *Builder
+	parent     *Function
+	params     []*Node
+	nodes      []*Node
+	returns    []*Node
+	nodeCount  int
+	constCache map[string]*Node
 }
 
 var _ compute.Function = (*Function)(nil)
@@ -33,9 +35,60 @@ func NewFunction(name string, builder *Builder) *Function {
 				return errors.Wrapf(compute.ErrNotImplemented, "%s (%d) not implemented for ONNX Runtime backend", op, op)
 			},
 		},
-		name:    name,
-		builder: builder,
+		name:       name,
+		builder:    builder,
+		constCache: make(map[string]*Node),
 	}
+}
+
+func (f *Function) addNode(node *Node) *Node {
+	f.nodeCount++
+	if node.name == "" {
+		if node.opType == "Constant" {
+			node.name = fmt.Sprintf("const_%d", f.nodeCount)
+		} else {
+			node.name = fmt.Sprintf("node_%d", f.nodeCount)
+		}
+	}
+	f.nodes = append(f.nodes, node)
+	return node
+}
+
+func (f *Function) constCacheKey(shape shapes.Shape, flat any) string {
+	var sb strings.Builder
+	sb.WriteString(shape.String())
+	sb.WriteByte('|')
+	if flat != nil {
+		raw := dtypes.UnsafeByteSliceFromAny(flat)
+		sb.Write(raw)
+	}
+	return sb.String()
+}
+
+func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
+	valType := reflect.TypeOf(flat)
+	if valType.Kind() != reflect.Slice && valType.Kind() != reflect.Array {
+		return nil, errors.Errorf("Constant expects flat to be a slice or array, got %T", flat)
+	}
+	dtype := dtypes.FromGoType(valType.Elem())
+	shape := shapes.Make(dtype, dims...)
+
+	key := f.constCacheKey(shape, flat)
+	if f.constCache == nil {
+		f.constCache = make(map[string]*Node)
+	}
+	if cached, ok := f.constCache[key]; ok {
+		return cached, nil
+	}
+
+	node := &Node{
+		opType:    "Constant",
+		shape:     shape,
+		flatValue: flat,
+	}
+	n := f.addNode(node)
+	f.constCache[key] = n
+	return n, nil
 }
 
 func (f *Function) Name() string {
@@ -76,23 +129,7 @@ func (f *Function) Parameter(name string, shape shapes.Shape, spec *compute.Shar
 	return node, nil
 }
 
-func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
-	valType := reflect.TypeOf(flat)
-	if valType.Kind() != reflect.Slice && valType.Kind() != reflect.Array {
-		return nil, errors.Errorf("Constant expects flat to be a slice or array, got %T", flat)
-	}
-	dtype := dtypes.FromGoType(valType.Elem())
-	shape := shapes.Make(dtype, dims...)
-	f.nodeCount++
-	node := &Node{
-		name:      fmt.Sprintf("const_%d", f.nodeCount),
-		opType:    "Constant",
-		shape:     shape,
-		flatValue: flat,
-	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
-}
+
 
 func (f *Function) Return(outputs []compute.Value, shardings []*compute.ShardingSpec) error {
 	f.returns = make([]*Node, len(outputs))
@@ -112,13 +149,10 @@ func (f *Function) Identity(x compute.Value) (compute.Value, error) {
 		return nil, errors.New("identity input is not a valid onnxruntime node")
 	}
 
-	f.nodeCount++
 	node := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: "Identity",
 		inputs: []*Node{xNode},
 		shape:  xNode.shape,
 	}
-	f.nodes = append(f.nodes, node)
-	return node, nil
+	return f.addNode(node), nil
 }
