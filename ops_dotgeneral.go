@@ -30,16 +30,6 @@ func (f *Function) DotGeneral(
 		return nil, errors.New("DotGeneral: inputs must be valid onnxruntime nodes")
 	}
 
-	// 1. Infer output shape
-	outShape, err := shapeinference.DotGeneral(
-		lhsNode.shape, lhsContractingAxes, lhsBatchAxes,
-		rhsNode.shape, rhsContractingAxes, rhsBatchAxes,
-		config,
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	// Determine accumulation and output types
 	accumulationDType := lhsNode.shape.DType
 	if config.AccumulatorDType != dtypes.InvalidDType {
@@ -71,6 +61,16 @@ func (f *Function) DotGeneral(
 		rhsInput = casted.(*Node)
 	}
 
+	// 1. Infer output shape
+	outShape, err := shapeinference.DotGeneral(
+		lhsInput.shape, lhsContractingAxes, lhsBatchAxes,
+		rhsInput.shape, rhsContractingAxes, rhsBatchAxes,
+		config,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	// 2. Generate Einsum equation
 	charPool := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	charIdx := 0
@@ -87,7 +87,7 @@ func (f *Function) DotGeneral(
 	rhsRank := rhsInput.shape.Rank()
 
 	lhsChars := make([]string, lhsRank)
-	for i := 0; i < lhsRank; i++ {
+	for i := range lhsRank {
 		lhsChars[i] = getNewChar()
 	}
 
@@ -102,7 +102,7 @@ func (f *Function) DotGeneral(
 	}
 
 	rhsChars := make([]string, rhsRank)
-	for i := 0; i < rhsRank; i++ {
+	for i := range rhsRank {
 		if lhsAxis, ok := rhsBatchMap[i]; ok {
 			rhsChars[i] = lhsChars[lhsAxis]
 		} else if lhsAxis, ok := rhsContractMap[i]; ok {
@@ -125,7 +125,7 @@ func (f *Function) DotGeneral(
 	for _, axis := range lhsBatchAxes {
 		lhsBatchSet[axis] = true
 	}
-	for i := 0; i < lhsRank; i++ {
+	for i := range lhsRank {
 		if !lhsContractSet[i] && !lhsBatchSet[i] {
 			outputChars = append(outputChars, lhsChars[i])
 		}
@@ -139,7 +139,7 @@ func (f *Function) DotGeneral(
 	for _, axis := range rhsBatchAxes {
 		rhsBatchSet[axis] = true
 	}
-	for i := 0; i < rhsRank; i++ {
+	for i := range rhsRank {
 		if !rhsContractSet[i] && !rhsBatchSet[i] {
 			outputChars = append(outputChars, rhsChars[i])
 		}

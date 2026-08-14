@@ -4,6 +4,7 @@ package onnxbackend
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/gomlx/compute"
 	onnx "github.com/gomlx/compute-onnx/internal/protos"
@@ -51,13 +52,7 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 	if keepDims {
 		outShape.Dimensions = make([]int, reduceInput.shape.Rank())
 		for axis, dim := range reduceInput.shape.Dimensions {
-			reduced := false
-			for _, a := range axesToUse {
-				if a == axis {
-					reduced = true
-					break
-				}
-			}
+			reduced := slices.Contains(axesToUse, axis)
 			if reduced {
 				outShape.Dimensions[axis] = 1
 			} else {
@@ -203,73 +198,73 @@ func makeIotaFlatData(dtype dtypes.DType, n int) any {
 	switch dtype {
 	case dtypes.Float32:
 		res := make([]float32, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = float32(i)
 		}
 		return res
 	case dtypes.Float64:
 		res := make([]float64, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = float64(i)
 		}
 		return res
 	case dtypes.Int32:
 		res := make([]int32, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = int32(i)
 		}
 		return res
 	case dtypes.Int64:
 		res := make([]int64, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = int64(i)
 		}
 		return res
 	case dtypes.Int16:
 		res := make([]int16, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = int16(i)
 		}
 		return res
 	case dtypes.Int8:
 		res := make([]int8, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = int8(i)
 		}
 		return res
 	case dtypes.Uint8:
 		res := make([]uint8, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = uint8(i)
 		}
 		return res
 	case dtypes.Uint16:
 		res := make([]uint16, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = uint16(i)
 		}
 		return res
 	case dtypes.Uint32:
 		res := make([]uint32, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = uint32(i)
 		}
 		return res
 	case dtypes.Uint64:
 		res := make([]uint64, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = uint64(i)
 		}
 		return res
 	case dtypes.Float16:
 		res := make([]float16.Float16, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = float16.FromFloat32(float32(i))
 		}
 		return res
 	case dtypes.BFloat16:
 		res := make([]bfloat16.BFloat16, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			res[i] = bfloat16.FromFloat32(float32(i))
 		}
 		return res

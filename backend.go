@@ -4,6 +4,7 @@ package onnxbackend
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -43,9 +44,7 @@ func getSupportedOps() map[compute.OpType]bool {
 	supportedOpsMutex.RLock()
 	defer supportedOpsMutex.RUnlock()
 	ops := make(map[compute.OpType]bool, len(supportedOps))
-	for k, v := range supportedOps {
-		ops[k] = v
-	}
+	maps.Copy(ops, supportedOps)
 	return ops
 }
 
@@ -156,8 +155,8 @@ func parseConfig(config string) (cuda bool, logSeverity int, err error) {
 		return HasNvidiaGPU(), -1, nil
 	}
 
-	parts := strings.Split(config, ",")
-	for _, part := range parts {
+	parts := strings.SplitSeq(config, ",")
+	for part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -176,10 +175,7 @@ func parseConfig(config string) (cuda bool, logSeverity int, err error) {
 				// level=1 -> severity=2 (WARNING)
 				// level=2 -> severity=1 (INFO)
 				// level>=3 -> severity=0 (VERBOSE)
-				severity := 3 - level
-				if severity < 0 {
-					severity = 0
-				}
+				severity := max(3-level, 0)
 				logSeverity = severity
 			} else {
 				return false, 0, errors.Errorf("unknown config option: %q", key)

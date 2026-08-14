@@ -47,7 +47,7 @@ func newExecutable(backend *Backend, session *ort.DynamicAdvancedSession,
 	nInputs := len(inputNames)
 	nOutputs := len(outputShapes)
 
-	return &Executable{
+	e := &Executable{
 		backend:          backend,
 		session:          session,
 		inputNames:       inputNames,
@@ -59,6 +59,8 @@ func newExecutable(backend *Backend, session *ort.DynamicAdvancedSession,
 		cachedOrtOutputs: make([]ort.Value, nOutputs),
 		modelProto:       modelProto,
 	}
+	runtime.SetFinalizer(e, (*Executable).Finalize)
+	return e
 }
 
 // ModelProto returns the ONNX ModelProto struct if Backend.KeepModelProto was enabled during compilation, or nil otherwise.

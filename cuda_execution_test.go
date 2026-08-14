@@ -7,8 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gomlx/gomlx/core/graph"
-	"github.com/gomlx/gomlx/core/tensors"
+	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 )
@@ -24,16 +23,32 @@ func TestSequentialDeferredMaterialization(t *testing.T) {
 	numExecutions := 10
 	inputSize := 8
 
-	// Build a simple graph: output = input * 2
-	exec, err := graph.NewExec(backend, func(input *graph.Node) *graph.Node {
-		return graph.MulScalar(input, 2.0)
-	})
+	builder := backend.Builder("seq_deferred")
+	mainFn := builder.Main()
+	inputShape := shapes.Make(dtypes.Float32, inputSize)
+	inVal, err := mainFn.Parameter("input", inputShape, nil)
 	if err != nil {
-		t.Fatalf("NewExec failed: %v", err)
+		t.Fatalf("Parameter failed: %v", err)
+	}
+	twoConst, err := mainFn.Constant([]float32{2.0})
+	if err != nil {
+		t.Fatalf("Constant failed: %v", err)
+	}
+	outVal, err := mainFn.Mul(inVal, twoConst)
+	if err != nil {
+		t.Fatalf("Mul failed: %v", err)
+	}
+	if err := mainFn.Return([]compute.Value{outVal}, nil); err != nil {
+		t.Fatalf("Return failed: %v", err)
 	}
 
-	// Execute N times with different inputs, keep all output tensors.
-	outputTensors := make([]*tensors.Tensor, numExecutions)
+	exec, err := builder.Compile()
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+	defer exec.Finalize()
+
+	outputBuffers := make([]compute.Buffer, numExecutions)
 	expectedResults := make([][]float32, numExecutions)
 
 	for i := range numExecutions {
@@ -45,28 +60,32 @@ func TestSequentialDeferredMaterialization(t *testing.T) {
 		}
 		expectedResults[i] = expected
 
-		inputTensor := tensors.FromFlatDataAndDimensions(inputData, inputSize)
-		outputs, err := exec.Call(inputTensor)
+		inBuf, err := backend.BufferFromFlatData(0, inputData, inputShape)
+		if err != nil {
+			t.Fatalf("BufferFromFlatData failed: %v", err)
+		}
+
+		outputs, err := exec.Execute([]compute.Buffer{inBuf}, []bool{false}, 0)
+		_ = inBuf.Finalize()
 		if err != nil {
 			t.Fatalf("Execution %d failed: %v", i, err)
 		}
-		outputTensors[i] = outputs[0]
-		// Don't materialize yet — keep the tensor alive.
+		outputBuffers[i] = outputs[0]
 	}
 
-	// Now materialize all outputs and verify correctness.
-	for i, tensor := range outputTensors {
+	// Materialize and verify all output buffers
+	for i, buf := range outputBuffers {
 		result := make([]float32, inputSize)
-		tensor.ConstFlatData(func(flat any) {
-			copy(result, flat.([]float32))
-		})
+		if err := buf.ToFlatData(result); err != nil {
+			t.Fatalf("ToFlatData %d failed: %v", i, err)
+		}
 		for j := range inputSize {
 			if math.Abs(float64(result[j]-expectedResults[i][j])) > 1e-5 {
 				t.Errorf("Execution %d, element %d: expected %f, got %f",
 					i, j, expectedResults[i][j], result[j])
 			}
 		}
-		_ = tensor.FinalizeAll()
+		_ = buf.Finalize()
 	}
 	t.Logf("Successfully verified %d sequential results with deferred materialization", numExecutions)
 }
@@ -82,18 +101,35 @@ func TestConcurrentExecution(t *testing.T) {
 	numExecutionsPerWorker := 5
 	inputSize := 8
 
-	// Build a simple graph: output = input * 2
-	exec, err := graph.NewExec(backend, func(input *graph.Node) *graph.Node {
-		return graph.MulScalar(input, 2.0)
-	})
+	builder := backend.Builder("concurrent_exec")
+	mainFn := builder.Main()
+	inputShape := shapes.Make(dtypes.Float32, inputSize)
+	inVal, err := mainFn.Parameter("input", inputShape, nil)
 	if err != nil {
-		t.Fatalf("NewExec failed: %v", err)
+		t.Fatalf("Parameter failed: %v", err)
 	}
+	twoConst, err := mainFn.Constant([]float32{2.0})
+	if err != nil {
+		t.Fatalf("Constant failed: %v", err)
+	}
+	outVal, err := mainFn.Mul(inVal, twoConst)
+	if err != nil {
+		t.Fatalf("Mul failed: %v", err)
+	}
+	if err := mainFn.Return([]compute.Value{outVal}, nil); err != nil {
+		t.Fatalf("Return failed: %v", err)
+	}
+
+	exec, err := builder.Compile()
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+	defer exec.Finalize()
 
 	type execResult struct {
 		workerID int
 		execID   int
-		tensor   *tensors.Tensor
+		buf      compute.Buffer
 		expected []float32
 	}
 
@@ -114,8 +150,14 @@ func TestConcurrentExecution(t *testing.T) {
 					expected[j] = v * 2.0
 				}
 
-				inputTensor := tensors.FromFlatDataAndDimensions(inputData, inputSize)
-				outputs, err := exec.Call(inputTensor)
+				inBuf, err := backend.BufferFromFlatData(0, inputData, inputShape)
+				if err != nil {
+					t.Errorf("Worker %d, execution %d buffer creation failed: %v", workerID, e, err)
+					return
+				}
+
+				outputs, err := exec.Execute([]compute.Buffer{inBuf}, []bool{false}, 0)
+				_ = inBuf.Finalize()
 				if err != nil {
 					t.Errorf("Worker %d, execution %d failed: %v", workerID, e, err)
 					return
@@ -125,7 +167,7 @@ func TestConcurrentExecution(t *testing.T) {
 				allResults = append(allResults, execResult{
 					workerID: workerID,
 					execID:   e,
-					tensor:   outputs[0],
+					buf:      outputs[0],
 					expected: expected,
 				})
 				mu.Unlock()
@@ -138,16 +180,16 @@ func TestConcurrentExecution(t *testing.T) {
 	// Verify all results (deferred materialization).
 	for _, r := range allResults {
 		result := make([]float32, inputSize)
-		r.tensor.ConstFlatData(func(flat any) {
-			copy(result, flat.([]float32))
-		})
+		if err := r.buf.ToFlatData(result); err != nil {
+			t.Fatalf("Worker %d, exec %d ToFlatData failed: %v", r.workerID, r.execID, err)
+		}
 		for j := range inputSize {
 			if math.Abs(float64(result[j]-r.expected[j])) > 1e-5 {
 				t.Errorf("Worker %d, exec %d, element %d: expected %f, got %f",
 					r.workerID, r.execID, j, r.expected[j], result[j])
 			}
 		}
-		_ = r.tensor.FinalizeAll()
+		_ = r.buf.Finalize()
 	}
 
 	t.Logf("Successfully verified %d results from %d workers", len(allResults), numWorkers)
@@ -159,33 +201,61 @@ func TestMultiInputHostTensorsCUDA(t *testing.T) {
 		t.Skip("Backend not available")
 	}
 
-	exec, err := graph.NewExec(backend, func(a, b, c *graph.Node) *graph.Node {
-		// Calculate (a + b) * c
-		sum := graph.Add(a, b)
-		return graph.Mul(sum, c)
-	})
+	builder := backend.Builder("multi_input")
+	mainFn := builder.Main()
+	sh := shapes.Make(dtypes.Float32, 4)
+	a, err := mainFn.Parameter("a", sh, nil)
 	if err != nil {
-		t.Fatalf("NewExec failed: %v", err)
+		t.Fatalf("Param a failed: %v", err)
 	}
+	b, err := mainFn.Parameter("b", sh, nil)
+	if err != nil {
+		t.Fatalf("Param b failed: %v", err)
+	}
+	c, err := mainFn.Parameter("c", sh, nil)
+	if err != nil {
+		t.Fatalf("Param c failed: %v", err)
+	}
+
+	sum, err := mainFn.Add(a, b)
+	if err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	prod, err := mainFn.Mul(sum, c)
+	if err != nil {
+		t.Fatalf("Mul failed: %v", err)
+	}
+	if err := mainFn.Return([]compute.Value{prod}, nil); err != nil {
+		t.Fatalf("Return failed: %v", err)
+	}
+
+	exec, err := builder.Compile()
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+	defer exec.Finalize()
 
 	aData := []float32{1.0, 2.0, 3.0, 4.0}
 	bData := []float32{10.0, 20.0, 30.0, 40.0}
 	cData := []float32{2.0, 2.0, 2.0, 2.0}
 
-	aTensor := tensors.FromFlatDataAndDimensions(aData, 4)
-	bTensor := tensors.FromFlatDataAndDimensions(bData, 4)
-	cTensor := tensors.FromFlatDataAndDimensions(cData, 4)
+	aBuf, _ := backend.BufferFromFlatData(0, aData, sh)
+	bBuf, _ := backend.BufferFromFlatData(0, bData, sh)
+	cBuf, _ := backend.BufferFromFlatData(0, cData, sh)
+	defer aBuf.Finalize()
+	defer bBuf.Finalize()
+	defer cBuf.Finalize()
 
-	outputs, err := exec.Call(aTensor, bTensor, cTensor)
+	outputs, err := exec.Execute([]compute.Buffer{aBuf, bBuf, cBuf}, []bool{false}, 0)
 	if err != nil {
 		t.Fatalf("Execution with multiple host inputs failed: %v", err)
 	}
+	defer outputs[0].Finalize()
 
 	result := make([]float32, 4)
-	outputs[0].ConstFlatData(func(flat any) {
-		copy(result, flat.([]float32))
-	})
-
+	if err := outputs[0].ToFlatData(result); err != nil {
+		t.Fatalf("ToFlatData failed: %v", err)
+	}
 	expected := []float32{22.0, 44.0, 66.0, 88.0}
 	for i := range expected {
 		if math.Abs(float64(result[i]-expected[i])) > 1e-5 {
@@ -200,36 +270,57 @@ func TestGatherEmbeddingCUDA(t *testing.T) {
 		t.Skip("Backend not available")
 	}
 
-	exec, err := graph.NewExec(backend, func(embeddingTable, indices *graph.Node) *graph.Node {
-		return graph.Gather(embeddingTable, indices)
-	})
+	builder := backend.Builder("gather_emb")
+	mainFn := builder.Main()
+	embShape := shapes.Make(dtypes.Float32, 4, 3)
+	idxShape := shapes.Make(dtypes.Int64, 2, 2, 1)
+
+	embTable, err := mainFn.Parameter("emb", embShape, nil)
 	if err != nil {
-		t.Fatalf("NewExec failed: %v", err)
+		t.Fatalf("Param emb failed: %v", err)
+	}
+	indices, err := mainFn.Parameter("idx", idxShape, nil)
+	if err != nil {
+		t.Fatalf("Param idx failed: %v", err)
 	}
 
-	// Embedding table: shape (4, 3)
+	gathered, err := mainFn.Gather(embTable, indices, 2, []int{2}, []int{0}, []int{0}, []int{1, 3}, false)
+	if err != nil {
+		t.Fatalf("Gather failed: %v", err)
+	}
+	if err := mainFn.Return([]compute.Value{gathered}, nil); err != nil {
+		t.Fatalf("Return failed: %v", err)
+	}
+
+	exec, err := builder.Compile()
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+	defer exec.Finalize()
+
 	embedData := []float32{
 		0.0, 0.1, 0.2, // idx 0
 		1.0, 1.1, 1.2, // idx 1
 		2.0, 2.1, 2.2, // idx 2
 		3.0, 3.1, 3.2, // idx 3
 	}
-	embedTensor := tensors.FromFlatDataAndDimensions(embedData, 4, 3)
-
-	// Indices: shape (2, 2, 1)
 	indicesData := []int64{3, 1, 0, 2}
-	indicesTensor := tensors.FromFlatDataAndDimensions(indicesData, 2, 2, 1)
 
-	outputs, err := exec.Call(embedTensor, indicesTensor)
+	embBuf, _ := backend.BufferFromFlatData(0, embedData, embShape)
+	idxBuf, _ := backend.BufferFromFlatData(0, indicesData, idxShape)
+	defer embBuf.Finalize()
+	defer idxBuf.Finalize()
+
+	outputs, err := exec.Execute([]compute.Buffer{embBuf, idxBuf}, []bool{false}, 0)
 	if err != nil {
 		t.Fatalf("Gather execution on CUDA failed: %v", err)
 	}
+	defer outputs[0].Finalize()
 
 	result := make([]float32, 2*2*3)
-	outputs[0].ConstFlatData(func(flat any) {
-		copy(result, flat.([]float32))
-	})
-
+	if err := outputs[0].ToFlatData(result); err != nil {
+		t.Fatalf("ToFlatData failed: %v", err)
+	}
 	expected := []float32{
 		3.0, 3.1, 3.2, // idx 3
 		1.0, 1.1, 1.2, // idx 1
@@ -243,9 +334,3 @@ func TestGatherEmbeddingCUDA(t *testing.T) {
 		}
 	}
 }
-
-// Ensure unused imports are accounted for.
-var (
-	_ = dtypes.Float32
-	_ = shapes.Make
-)
