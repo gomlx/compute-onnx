@@ -30,16 +30,6 @@ func (f *Function) DotGeneral(
 		return nil, errors.New("DotGeneral: inputs must be valid onnxruntime nodes")
 	}
 
-	// 1. Infer output shape
-	outShape, err := shapeinference.DotGeneral(
-		lhsNode.shape, lhsContractingAxes, lhsBatchAxes,
-		rhsNode.shape, rhsContractingAxes, rhsBatchAxes,
-		config,
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	// Determine accumulation and output types
 	accumulationDType := lhsNode.shape.DType
 	if config.AccumulatorDType != dtypes.InvalidDType {
@@ -69,6 +59,16 @@ func (f *Function) DotGeneral(
 			return nil, err
 		}
 		rhsInput = casted.(*Node)
+	}
+
+	// 1. Infer output shape
+	outShape, err := shapeinference.DotGeneral(
+		lhsInput.shape, lhsContractingAxes, lhsBatchAxes,
+		rhsInput.shape, rhsContractingAxes, rhsBatchAxes,
+		config,
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	// 2. Generate Einsum equation

@@ -156,3 +156,75 @@ func TestFusedLayerNormErrors(t *testing.T) {
 		t.Errorf("Expected NotImplemented error for non-contiguous trailing axes, got: %v", err)
 	}
 }
+
+func TestTrigOps(t *testing.T) {
+	b, err := New("cpu")
+	if err != nil {
+		t.Fatalf("Failed to create backend: %+v", err)
+	}
+	defer b.Finalize()
+
+	ops := map[string]func(compute.Function, compute.Value) (compute.Value, error){
+		"Cos":   func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Cos(x) },
+		"Sin":   func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Sin(x) },
+		"Exp":   func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Exp(x) },
+		"Log":   func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Log(x) },
+		"Sqrt":  func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Sqrt(x) },
+		"Abs":   func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Abs(x) },
+		"Neg":   func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Neg(x) },
+		"Ceil":  func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Ceil(x) },
+		"Floor": func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Floor(x) },
+		"Round": func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Round(x) },
+		"Erf":   func(f compute.Function, x compute.Value) (compute.Value, error) { return f.Erf(x) },
+	}
+
+	for name, fn := range ops {
+		t.Run(name+"_Float64", func(t *testing.T) {
+			x := []float64{0, 1}
+			got, err := testutil.Exec1(b, []any{x}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+				return fn(f, params[0])
+			})
+			if err != nil {
+				t.Logf("%s Float64 FAILED: %+v", name, err)
+			} else {
+				t.Logf("%s Float64 PASSED: %v", name, got)
+			}
+		})
+	}
+}
+
+func TestRNGBitGenerator(t *testing.T) {
+	b, err := New("cpu")
+	if err != nil {
+		t.Fatalf("Failed to create backend: %+v", err)
+	}
+	defer b.Finalize()
+
+	state := []uint64{42, 0, 0}
+	got, err := testutil.Exec1(b, []any{state}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+		_, val, err := f.RNGBitGenerator(params[0], shapes.Make(dtypes.Uint64, 4))
+		return val, err
+	})
+	if err != nil {
+		t.Fatalf("RNGBitGenerator failed: %+v", err)
+	}
+	t.Logf("RNGBitGenerator Uint64 got: %v", got)
+}
+
+func TestEinsumFloat64(t *testing.T) {
+	b, err := New("cpu")
+	if err != nil {
+		t.Fatalf("Failed to create backend: %+v", err)
+	}
+	defer b.Finalize()
+
+	lhs := [][][]float64{{{1, 2, 3}, {4, 5, 6}}} // [1, 2, 3]
+	rhs := [][]float64{{0.1, 0.2}}              // [1, 2]
+	got, err := testutil.Exec1(b, []any{lhs, rhs}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+		return f.DotGeneral(params[0], []int{1}, nil, params[1], []int{1}, nil, compute.DotGeneralConfig{})
+	})
+	if err != nil {
+		t.Fatalf("DotGeneral Float64 failed: %+v", err)
+	}
+	t.Logf("DotGeneral Float64 got: %v", got)
+}

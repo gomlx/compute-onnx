@@ -3,6 +3,8 @@
 package onnxbackend
 
 import (
+	"math"
+
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
@@ -55,16 +57,12 @@ func (f *Function) Log1p(x compute.Value) (compute.Value, error) {
 		oneConst, err = f.Constant([]float32{1.0})
 	case dtypes.Float64:
 		oneConst, err = f.Constant([]float64{1.0})
-	case dtypes.Int32:
-		oneConst, err = f.Constant([]int32{1})
-	case dtypes.Int64:
-		oneConst, err = f.Constant([]int64{1})
 	case dtypes.Float16:
 		oneConst, err = f.Constant([]float16.Float16{float16.FromFloat32(1.0)})
 	case dtypes.BFloat16:
 		oneConst, err = f.Constant([]bfloat16.BFloat16{bfloat16.FromFloat32(1.0)})
 	default:
-		return nil, errors.Errorf("Log1p: unsupported input dtype %s", xNode.shape.DType)
+		return nil, errors.Errorf("Log1p: unsupported DType %s", xNode.shape.DType)
 	}
 	if err != nil {
 		return nil, err
@@ -78,6 +76,25 @@ func (f *Function) Log1p(x compute.Value) (compute.Value, error) {
 }
 
 func (f *Function) Cos(x compute.Value) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("input must be a valid onnxruntime node")
+	}
+
+	// ONNX Runtime CPU provider lacks Cos for Float64 (double).
+	// We compute cos(x) = sin(x + pi/2) when DType is Float64.
+	if xNode.shape.DType == dtypes.Float64 {
+		piOver2Const, err := f.Constant([]float64{math.Pi / 2.0})
+		if err != nil {
+			return nil, err
+		}
+		xPlusPiOver2, err := f.Add(xNode, piOver2Const)
+		if err != nil {
+			return nil, err
+		}
+		return f.Sin(xPlusPiOver2)
+	}
+
 	return f.addUnaryOp(compute.OpTypeCos, "Cos", x)
 }
 
@@ -94,6 +111,25 @@ func (f *Function) Logistic(x compute.Value) (compute.Value, error) {
 }
 
 func (f *Function) Erf(x compute.Value) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("input must be a valid onnxruntime node")
+	}
+
+	// ONNX Runtime CPU provider lacks Erf for Float64 (double).
+	// We convert to Float32, compute Erf, and convert back to Float64 when DType is Float64.
+	if xNode.shape.DType == dtypes.Float64 {
+		x32, err := f.ConvertDType(xNode, dtypes.Float32)
+		if err != nil {
+			return nil, err
+		}
+		erf32, err := f.addUnaryOp(compute.OpTypeErf, "Erf", x32)
+		if err != nil {
+			return nil, err
+		}
+		return f.ConvertDType(erf32, dtypes.Float64)
+	}
+
 	return f.addUnaryOp(compute.OpTypeErf, "Erf", x)
 }
 
