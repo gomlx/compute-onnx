@@ -51,10 +51,10 @@ func TestSequentialDeferredMaterialization(t *testing.T) {
 	outputBuffers := make([]compute.Buffer, numExecutions)
 	expectedResults := make([][]float32, numExecutions)
 
-	for i := 0; i < numExecutions; i++ {
+	for i := range numExecutions {
 		inputData := make([]float32, inputSize)
 		expected := make([]float32, inputSize)
-		for j := 0; j < inputSize; j++ {
+		for j := range inputSize {
 			inputData[j] = float32(i*inputSize + j + 1)
 			expected[j] = inputData[j] * 2.0
 		}
@@ -79,7 +79,7 @@ func TestSequentialDeferredMaterialization(t *testing.T) {
 		if err := buf.ToFlatData(result); err != nil {
 			t.Fatalf("ToFlatData %d failed: %v", i, err)
 		}
-		for j := 0; j < inputSize; j++ {
+		for j := range inputSize {
 			if math.Abs(float64(result[j]-expectedResults[i][j])) > 1e-5 {
 				t.Errorf("Execution %d, element %d: expected %f, got %f",
 					i, j, expectedResults[i][j], result[j])
@@ -137,14 +137,14 @@ func TestConcurrentExecution(t *testing.T) {
 	var allResults []execResult
 	var wg sync.WaitGroup
 
-	for w := 0; w < numWorkers; w++ {
+	for w := range numWorkers {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			for e := 0; e < numExecutionsPerWorker; e++ {
+			for e := range numExecutionsPerWorker {
 				inputData := make([]float32, inputSize)
 				expected := make([]float32, inputSize)
-				for j := 0; j < inputSize; j++ {
+				for j := range inputSize {
 					v := float32(workerID*1000 + e*100 + j + 1)
 					inputData[j] = v
 					expected[j] = v * 2.0
@@ -183,7 +183,7 @@ func TestConcurrentExecution(t *testing.T) {
 		if err := r.buf.ToFlatData(result); err != nil {
 			t.Fatalf("Worker %d, exec %d ToFlatData failed: %v", r.workerID, r.execID, err)
 		}
-		for j := 0; j < inputSize; j++ {
+		for j := range inputSize {
 			if math.Abs(float64(result[j]-r.expected[j])) > 1e-5 {
 				t.Errorf("Worker %d, exec %d, element %d: expected %f, got %f",
 					r.workerID, r.execID, j, r.expected[j], result[j])

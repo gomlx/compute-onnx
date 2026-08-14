@@ -94,7 +94,7 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 	// 3. Prepare Attributes for ONNX Conv (pads, strides, dilations, group)
 	onnxPads := make([]int64, numSpatial*2)
 	if len(paddings) > 0 {
-		for i := 0; i < numSpatial; i++ {
+		for i := range numSpatial {
 			if i < len(paddings) {
 				onnxPads[i] = int64(paddings[i][0])            // begin
 				onnxPads[i+numSpatial] = int64(paddings[i][1]) // end
@@ -103,7 +103,7 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 	}
 
 	onnxStrides := make([]int64, numSpatial)
-	for i := 0; i < numSpatial; i++ {
+	for i := range numSpatial {
 		if i < len(strides) {
 			onnxStrides[i] = int64(strides[i])
 		} else {
@@ -112,7 +112,7 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 	}
 
 	onnxDilations := make([]int64, numSpatial)
-	for i := 0; i < numSpatial; i++ {
+	for i := range numSpatial {
 		if i < len(kernelDilations) {
 			onnxDilations[i] = int64(kernelDilations[i])
 		} else {

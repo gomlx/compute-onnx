@@ -42,7 +42,7 @@ func (f *Function) scatter(
 		indexedAxesSet[ax] = true
 	}
 	var sliceAxes []int
-	for i := 0; i < operandRank; i++ {
+	for i := range operandRank {
 		if !indexedAxesSet[i] {
 			sliceAxes = append(sliceAxes, i)
 		}
@@ -64,7 +64,7 @@ func (f *Function) scatter(
 		updateWindowSet[ax] = true
 	}
 	var updatesIndexAxes []int
-	for i := 0; i < updatesRank; i++ {
+	for i := range updatesRank {
 		if !updateWindowSet[i] {
 			updatesIndexAxes = append(updatesIndexAxes, i)
 		}

@@ -72,7 +72,7 @@ func (f *Function) ReduceWindow(
 		reshapeDims[0] = 1
 		reshapeDims[1] = 1
 		reshapeDims[2] = 1
-		for i := 0; i < rank; i++ {
+		for i := range rank {
 			reshapeDims[3-(rank-1)+i] = opNode.shape.Dimensions[i]
 		}
 		in4D, errR := f.Reshape(opNode, reshapeDims...)
@@ -135,7 +135,7 @@ func (f *Function) ReduceWindow(
 
 	// 2. Prepare attributes for ONNX MaxPool / AveragePool (kernel_shape, pads, strides, dilations)
 	kernelShape := make([]int64, numSpatial)
-	for i := 0; i < numSpatial; i++ {
+	for i := range numSpatial {
 		origSpatialAxis := inputPerm[2+i]
 		if len(windowDimensions) > origSpatialAxis {
 			kernelShape[i] = int64(windowDimensions[origSpatialAxis])
@@ -146,7 +146,7 @@ func (f *Function) ReduceWindow(
 
 	onnxPads := make([]int64, numSpatial*2)
 	if len(paddings) > 0 {
-		for i := 0; i < numSpatial; i++ {
+		for i := range numSpatial {
 			origSpatialAxis := inputPerm[2+i]
 			if origSpatialAxis < len(paddings) {
 				onnxPads[i] = int64(paddings[origSpatialAxis][0])            // begin
@@ -156,7 +156,7 @@ func (f *Function) ReduceWindow(
 	}
 
 	onnxStrides := make([]int64, numSpatial)
-	for i := 0; i < numSpatial; i++ {
+	for i := range numSpatial {
 		origSpatialAxis := inputPerm[2+i]
 		if len(strides) > origSpatialAxis {
 			onnxStrides[i] = int64(strides[origSpatialAxis])
@@ -166,7 +166,7 @@ func (f *Function) ReduceWindow(
 	}
 
 	onnxDilations := make([]int64, numSpatial)
-	for i := 0; i < numSpatial; i++ {
+	for i := range numSpatial {
 		origSpatialAxis := inputPerm[2+i]
 		if len(windowDilations) > origSpatialAxis {
 			onnxDilations[i] = int64(windowDilations[origSpatialAxis])
@@ -205,7 +205,7 @@ func (f *Function) ReduceWindow(
 	poolOutDims := make([]int, rank)
 	poolOutDims[0] = outShape.Dimensions[0]
 	poolOutDims[1] = outShape.Dimensions[channelAxis]
-	for i := 0; i < numSpatial; i++ {
+	for i := range numSpatial {
 		origSpatialAxis := inputPerm[2+i]
 		poolOutDims[2+i] = outShape.Dimensions[origSpatialAxis]
 	}
@@ -245,7 +245,7 @@ func (f *Function) ReduceWindow(
 	outputPerm := make([]int, rank)
 	outputPerm[0] = 0
 	outputPerm[channelAxis] = 1
-	for i := 0; i < numSpatial; i++ {
+	for i := range numSpatial {
 		origSpatialAxis := inputPerm[2+i]
 		outputPerm[origSpatialAxis] = 2 + i
 	}

@@ -40,10 +40,10 @@ func broadcastToShape(f *Function, val compute.Value, targetShape shapes.Shape) 
 	if currentRank < targetRank {
 		diff := targetRank - currentRank
 		newDims := make([]int, targetRank)
-		for i := 0; i < diff; i++ {
+		for i := range diff {
 			newDims[i] = 1
 		}
-		for i := 0; i < currentRank; i++ {
+		for i := range currentRank {
 			newDims[diff+i] = valNode.shape.Dimensions[i]
 		}
 		reshaped, err := f.Reshape(valNode, newDims...)
@@ -58,7 +58,7 @@ func broadcastToShape(f *Function, val compute.Value, targetShape shapes.Shape) 
 	}
 
 	axes := make([]int, targetRank)
-	for i := 0; i < targetRank; i++ {
+	for i := range targetRank {
 		axes[i] = i
 	}
 	return f.BroadcastInDim(currVal, targetShape, axes)
@@ -410,7 +410,7 @@ func (f *Function) FusedScaledDotProductAttention(
 		repeats := numHeadsQ / numHeadsKV
 		sliceK := make([]compute.Value, repeats)
 		sliceV := make([]compute.Value, repeats)
-		for i := 0; i < repeats; i++ {
+		for i := range repeats {
 			sliceK[i] = kBHSD
 			sliceV[i] = vBHSD
 		}
@@ -561,8 +561,8 @@ func (f *Function) FusedScaledDotProductAttention(
 		switch qNode.shape.DType {
 		case dtypes.Float32:
 			maskFlat := make([]float32, seqLen*kvLen)
-			for i := 0; i < seqLen; i++ {
-				for j := 0; j < kvLen; j++ {
+			for i := range seqLen {
+				for j := range kvLen {
 					if j > i {
 						maskFlat[i*kvLen+j] = -1e9
 					}
@@ -571,8 +571,8 @@ func (f *Function) FusedScaledDotProductAttention(
 			causalMaskConst, err = f.Constant(maskFlat, 1, 1, seqLen, kvLen)
 		case dtypes.Float64:
 			maskFlat := make([]float64, seqLen*kvLen)
-			for i := 0; i < seqLen; i++ {
-				for j := 0; j < kvLen; j++ {
+			for i := range seqLen {
+				for j := range kvLen {
 					if j > i {
 						maskFlat[i*kvLen+j] = -1e9
 					}
@@ -582,8 +582,8 @@ func (f *Function) FusedScaledDotProductAttention(
 		case dtypes.Float16:
 			maskFlat := make([]float16.Float16, seqLen*kvLen)
 			negVal := float16.FromFloat32(-10000.0)
-			for i := 0; i < seqLen; i++ {
-				for j := 0; j < kvLen; j++ {
+			for i := range seqLen {
+				for j := range kvLen {
 					if j > i {
 						maskFlat[i*kvLen+j] = negVal
 					}
@@ -593,8 +593,8 @@ func (f *Function) FusedScaledDotProductAttention(
 		case dtypes.BFloat16:
 			maskFlat := make([]bfloat16.BFloat16, seqLen*kvLen)
 			negVal := bfloat16.FromFloat32(-1e9)
-			for i := 0; i < seqLen; i++ {
-				for j := 0; j < kvLen; j++ {
+			for i := range seqLen {
+				for j := range kvLen {
 					if j > i {
 						maskFlat[i*kvLen+j] = negVal
 					}

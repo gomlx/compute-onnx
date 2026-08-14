@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/gomlx/compute"
-	"github.com/gomlx/compute/dtypes"
 	onnx "github.com/gomlx/compute-onnx/internal/protos"
+	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
@@ -68,7 +68,7 @@ func (f *Function) SelectAndScatterMax(operand compute.Value, source compute.Val
 
 	// 1. Run MaxPool with 2 outputs: [pooled_out, max_indices]
 	kernelShape := make([]int64, numSpatial)
-	for i := 0; i < numSpatial; i++ {
+	for i := range numSpatial {
 		origSpatialAxis := inputPerm[2+i]
 		if len(windowDimensions) > origSpatialAxis {
 			kernelShape[i] = int64(windowDimensions[origSpatialAxis])
@@ -79,7 +79,7 @@ func (f *Function) SelectAndScatterMax(operand compute.Value, source compute.Val
 
 	onnxPads := make([]int64, numSpatial*2)
 	if len(paddings) > 0 {
-		for i := 0; i < numSpatial; i++ {
+		for i := range numSpatial {
 			origSpatialAxis := inputPerm[2+i]
 			if origSpatialAxis < len(paddings) {
 				onnxPads[i] = int64(paddings[origSpatialAxis][0])            // begin
@@ -89,7 +89,7 @@ func (f *Function) SelectAndScatterMax(operand compute.Value, source compute.Val
 	}
 
 	onnxStrides := make([]int64, numSpatial)
-	for i := 0; i < numSpatial; i++ {
+	for i := range numSpatial {
 		origSpatialAxis := inputPerm[2+i]
 		if len(windowStrides) > origSpatialAxis {
 			onnxStrides[i] = int64(windowStrides[origSpatialAxis])
@@ -207,7 +207,7 @@ func (f *Function) SelectAndScatterMax(operand compute.Value, source compute.Val
 		outputPerm := make([]int, rank)
 		outputPerm[0] = 0
 		outputPerm[channelAxis] = 1
-		for i := 0; i < numSpatial; i++ {
+		for i := range numSpatial {
 			origSpatialAxis := inputPerm[2+i]
 			outputPerm[origSpatialAxis] = 2 + i
 		}

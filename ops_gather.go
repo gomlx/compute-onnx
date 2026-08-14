@@ -4,6 +4,7 @@ package onnxbackend
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/gomlx/compute"
 	onnx "github.com/gomlx/compute-onnx/internal/protos"
@@ -17,13 +18,7 @@ func init() {
 }
 
 func makeShape(dtype dtypes.DType, dims []int, axisNames []string) shapes.Shape {
-	isDynamic := false
-	for _, d := range dims {
-		if d == shapes.DynamicDim {
-			isDynamic = true
-			break
-		}
-	}
+	isDynamic := slices.Contains(dims, shapes.DynamicDim)
 	if isDynamic {
 		newNames := make([]string, len(dims))
 		if len(axisNames) == len(dims) {
@@ -61,7 +56,6 @@ func (f *Function) Gather(
 	startIndicesShape := startIndicesNode.shape
 	Q := startIndicesShape.Rank()
 
-
 	// 1. Prepare indices to move the indexVectorAxis to the last axis.
 	var indicesNode *Node
 	if indexVectorAxis == Q {
@@ -81,7 +75,7 @@ func (f *Function) Gather(
 		// Move indexVectorAxis to the end.
 		perm := make([]int, Q)
 		idx := 0
-		for i := 0; i < Q; i++ {
+		for i := range Q {
 			if i != indexVectorAxis {
 				perm[idx] = i
 				idx++
@@ -160,7 +154,7 @@ func (f *Function) Gather(
 			start := make([]int, gatherNDRank)
 			limit := make([]int, gatherNDRank)
 			stride := make([]int, gatherNDRank)
-			for i := 0; i < gatherNDRank; i++ {
+			for i := range gatherNDRank {
 				start[i] = 0
 				limit[i] = gatherNDNode.shape.Dimensions[i]
 				stride[i] = 1
@@ -194,17 +188,11 @@ func (f *Function) Gather(
 	copy(reshapedDims[len(B):], O)
 
 	var reshapedVal compute.Value
-	isReshapeDynamic := false
-	for _, d := range reshapedDims {
-		if d == shapes.DynamicDim {
-			isReshapeDynamic = true
-			break
-		}
-	}
+	isReshapeDynamic := slices.Contains(reshapedDims, shapes.DynamicDim)
 
 	if isReshapeDynamic {
 		specs := make([]compute.DynamicDimensionSpec, len(reshapedDims))
-		for i := 0; i < len(B); i++ {
+		for i := range B {
 			if B[i] == shapes.DynamicDim {
 				dimSize, err := f.DynamicDimensionSize(indicesNode, i)
 				if err != nil {
@@ -246,7 +234,7 @@ func (f *Function) Gather(
 	// 6. Transpose to the final output shape.
 	finalRank := len(reshapedDims)
 	P := make([]int, finalRank)
-	for i := 0; i < finalRank; i++ {
+	for i := range finalRank {
 		offsetIdx := -1
 		for idx, axis := range offsetOutputAxes {
 			if axis == i {
@@ -260,13 +248,7 @@ func (f *Function) Gather(
 			// Find the index of this batch dimension in B.
 			j := 0
 			for prev := 0; prev < i; prev++ {
-				isOffset := false
-				for _, axis := range offsetOutputAxes {
-					if axis == prev {
-						isOffset = true
-						break
-					}
-				}
+				isOffset := slices.Contains(offsetOutputAxes, prev)
 				if !isOffset {
 					j++
 				}

@@ -214,7 +214,7 @@ func (f *Function) Slice(x compute.Value, start []int, limit []int, stride []int
 	axes64 := make([]int64, rank)
 	steps64 := make([]int64, rank)
 
-	for i := 0; i < rank; i++ {
+	for i := range rank {
 		starts64[i] = int64(start[i])
 		if limit[i] == shapes.DynamicDim || (xNode.shape.Dimensions[i] == shapes.DynamicDim && limit[i] <= 0) {
 			ends64[i] = math.MaxInt64
@@ -463,7 +463,7 @@ func (f *Function) DynamicSlice(operand compute.Value, startIndices []compute.Va
 	axesList := make([]compute.Value, rank)
 	stepsList := make([]compute.Value, rank)
 
-	for i := 0; i < rank; i++ {
+	for i := range rank {
 		startNode, ok := startIndices[i].(*Node)
 		if !ok {
 			return nil, errors.Errorf("DynamicSlice: startIndices[%d] must be a valid onnxruntime node", i)
@@ -579,7 +579,7 @@ func (f *Function) DynamicUpdateSlice(operand, update compute.Value, startIndice
 	padsAfterList := make([]compute.Value, rank)
 	maskParts := make([]compute.Value, 0, rank)
 
-	for i := 0; i < rank; i++ {
+	for i := range rank {
 		startNode, ok := startIndices[i].(*Node)
 		if !ok {
 			return nil, errors.Errorf("DynamicUpdateSlice: startIndices[%d] must be a valid onnxruntime node", i)
@@ -650,7 +650,7 @@ func (f *Function) DynamicUpdateSlice(operand, update compute.Value, startIndice
 
 		if K_i < N_i {
 			iotaShapeDims := make([]int, rank)
-			for j := 0; j < rank; j++ {
+			for j := range rank {
 				if j == i {
 					iotaShapeDims[j] = N_i
 				} else {
