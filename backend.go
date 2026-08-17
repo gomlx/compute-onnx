@@ -32,6 +32,8 @@ var (
 	autoInstall = true
 )
 
+// NoAutoInstallEnv is the environment variable that, when set, disables
+// automatic downloading and installation of prebuilt ONNX Runtime shared libraries.
 const NoAutoInstallEnv = "GOMLX_NO_AUTO_INSTALL"
 
 func registerOp(op compute.OpType) {
