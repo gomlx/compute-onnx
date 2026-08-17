@@ -199,7 +199,7 @@ func (f *Function) DotGeneral(
 		lastNode = einsumNode
 	}
 	if outShape.Rank() == 0 {
-		newDimsConst, err := f.Constant([]int64{1}, 1)
+		newDimsConst, err := f.Constant([]int64{}, 0)
 		if err != nil {
 			return nil, err
 		}
