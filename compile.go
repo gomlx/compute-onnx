@@ -28,9 +28,13 @@ func shapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
 	onnxDims := make([]*onnx.TensorShapeProto_Dimension, len(dims))
 	for i, d := range dims {
 		if d == shapes.DynamicDim {
+			paramName := shape.AxisName(i)
+			if paramName == "" || paramName == shapes.AnonymousAxis {
+				paramName = fmt.Sprintf("axis_%d", i)
+			}
 			onnxDims[i] = &onnx.TensorShapeProto_Dimension{
 				Value: &onnx.TensorShapeProto_Dimension_DimParam{
-					DimParam: fmt.Sprintf("axis_%d", i),
+					DimParam: paramName,
 				},
 			}
 		} else {
