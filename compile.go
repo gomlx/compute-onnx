@@ -28,9 +28,13 @@ func shapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
 	onnxDims := make([]*onnx.TensorShapeProto_Dimension, len(dims))
 	for i, d := range dims {
 		if d == shapes.DynamicDim {
+			paramName := shape.AxisName(i)
+			if paramName == "" || paramName == shapes.AnonymousAxis {
+				paramName = fmt.Sprintf("axis_%d", i)
+			}
 			onnxDims[i] = &onnx.TensorShapeProto_Dimension{
 				Value: &onnx.TensorShapeProto_Dimension_DimParam{
-					DimParam: fmt.Sprintf("axis_%d", i),
+					DimParam: paramName,
 				},
 			}
 		} else {
@@ -100,9 +104,6 @@ func constantToTensorProto(name string, shape shapes.Shape, flat any) *onnx.Tens
 	}
 
 	dims := shape.Dimensions
-	if len(dims) == 0 {
-		dims = []int{1}
-	}
 	onnxDims := make([]int64, len(dims))
 	for i, d := range dims {
 		onnxDims[i] = int64(d)
@@ -294,7 +295,13 @@ func (b *Builder) Compile() (compute.Executable, error) {
 
 	session, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inputNames, outputNames, options)
 	if err != nil {
-		_ = os.WriteFile("failed_model.onnx", modelBytes, 0644)
+		if filePath := os.Getenv(SaveOnFailureEnv); filePath != "" {
+			if wErr := os.WriteFile(filePath, modelBytes, 0644); wErr == nil {
+				klog.Infof("Saving failed model to %q ($%s)", filePath, SaveOnFailureEnv)
+			} else {
+				klog.Errorf("Failed to save failed model to %q ($%s): %+v", filePath, SaveOnFailureEnv, wErr)
+			}
+		}
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime session")
 	}
 

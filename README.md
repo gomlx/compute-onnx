@@ -54,6 +54,27 @@ See [an example in UCI-Adult demo](https://github.com/gomlx/gomlx/blob/main/exam
 GOMLX_BACKEND=onnx go run -tags=onnx ./examples/adult/demo/ -checkpoint "base" -save_onnx="/tmp/a.onnx" -vmodule=save_onnx=1
 ```
 
+### Inspecting `.onnx` Files (`onnx_printer`)
+
+This repository includes a CLI tool in `cmd/onnx_printer` to inspect and pretty-print `.onnx` model files in the terminal:
+
+```bash
+go run github.com/gomlx/compute-onnx/cmd/onnx_printer path/to/model.onnx
+```
+
+It formats input, output, and node tensor shapes using GoMLX `shapes.Shape` (including named dynamic axes) and prints each graph operation on a single line. Tensor constants and initializers are truncated to 10 elements by default (controlled via `-max_items` / `-n`).
+
+Example usage:
+```bash
+# Print model details with a maximum of 5 items for constant values
+go run github.com/gomlx/compute-onnx/cmd/onnx_printer -max_items 5 /tmp/model.onnx
+
+# Read from stdin
+cat /tmp/model.onnx | go run github.com/gomlx/compute-onnx/cmd/onnx_printer
+```
+
+> **Tip**: For interactive graphical visualization of ONNX models, you can open `.onnx` model files using [Netron](https://netron.app/).
+
 
 ### Logging & Verbosity
 

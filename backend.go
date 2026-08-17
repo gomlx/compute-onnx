@@ -32,7 +32,14 @@ var (
 	autoInstall = true
 )
 
+// NoAutoInstallEnv is the environment variable that, when set, disables
+// automatic downloading and installation of prebuilt ONNX Runtime shared libraries.
 const NoAutoInstallEnv = "GOMLX_NO_AUTO_INSTALL"
+
+// SaveOnFailureEnv is the environment variable that, when set to a file path,
+// instructs the ONNX Runtime backend to save the serialized ONNX model protobuf to
+// that path if graph compilation / session creation fails.
+const SaveOnFailureEnv = "GOMLX_ONNX_SAVE_ON_FAILURE"
 
 func registerOp(op compute.OpType) {
 	supportedOpsMutex.Lock()
