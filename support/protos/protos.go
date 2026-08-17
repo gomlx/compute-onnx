@@ -3,4 +3,4 @@
 // Package protos contains the protobuf generated code for the ONNX format.
 package protos
 
-//go:generate go run ../cmd/update_protos
+//go:generate go run ../../internal/cmd/update_protos

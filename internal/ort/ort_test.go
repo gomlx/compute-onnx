@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	onnx "github.com/gomlx/compute-onnx/internal/protos"
+	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"google.golang.org/protobuf/proto"
 )
 

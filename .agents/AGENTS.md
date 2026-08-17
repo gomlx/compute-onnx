@@ -58,9 +58,9 @@
 - **`internal/pool`**:
   Memory arena and slice pooling utilities used by the CPU execution path to eliminate heap allocations for intermediate computation buffers during repeated training steps.
 
-- **`internal/protos`**:
+- **`support/protos`**:
   Auto-generated Go Protocol Buffer bindings for ONNX specifications (`onnx-ml.pb.go`), compiled from official `.proto` definitions.
 
 - **Internal Tools (`internal/cmd/`)**:
   - **`internal/cmd/update_c_ort`**: Code generation / maintenance script that downloads and updates C header files (`onnxruntime_c_api.h`) from upstream ONNX Runtime releases.
-  - **`internal/cmd/update_protos`**: Code generation tool that fetches official ONNX `.proto` files and runs `protoc` to re-generate Go structs in `internal/protos`.
+  - **`internal/cmd/update_protos`**: Code generation tool that fetches official ONNX `.proto` files and runs `protoc` to re-generate Go structs in `support/protos`.

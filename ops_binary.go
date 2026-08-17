@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/gomlx/compute"
-	onnx "github.com/gomlx/compute-onnx/internal/protos"
+	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/shapeinference"
 	"github.com/pkg/errors"
 )

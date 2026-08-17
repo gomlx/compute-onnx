@@ -99,7 +99,10 @@ const (
 	Version_IR_VERSION_2025_08_26 Version = 12
 	// IR VERSION 13 published on November 6, 2025
 	// Added UINT2, INT2.
-	Version_IR_VERSION Version = 13
+	Version_IR_VERSION_2025_11_06 Version = 13
+	// IR VERSION 14 published on TBD
+	// Made TypeProto.Opaque available in non-ONNX-ML builds.
+	Version_IR_VERSION Version = 14
 )
 
 // Enum value maps for Version.
@@ -118,7 +121,8 @@ var (
 		10: "IR_VERSION_2024_3_25",
 		11: "IR_VERSION_2025_05_12",
 		12: "IR_VERSION_2025_08_26",
-		13: "IR_VERSION",
+		13: "IR_VERSION_2025_11_06",
+		14: "IR_VERSION",
 	}
 	Version_value = map[string]int32{
 		"_START_VERSION":        0,
@@ -134,7 +138,8 @@ var (
 		"IR_VERSION_2024_3_25":  10,
 		"IR_VERSION_2025_05_12": 11,
 		"IR_VERSION_2025_08_26": 12,
-		"IR_VERSION":            13,
+		"IR_VERSION_2025_11_06": 13,
+		"IR_VERSION":            14,
 	}
 )
 
@@ -3364,7 +3369,7 @@ const file_onnx_ml_proto_rawDesc = "" +
 	"\n" +
 	"denotation\x18\x03 \x01(\tR\n" +
 	"denotationB\a\n" +
-	"\x05value\"\xee\x06\n" +
+	"\x05value\"\x80\a\n" +
 	"\tTypeProto\x12;\n" +
 	"\vtensor_type\x18\x01 \x01(\v2\x18.protos.TypeProto.TensorH\x00R\n" +
 	"tensorType\x12A\n" +
@@ -3390,10 +3395,11 @@ const file_onnx_ml_proto_rawDesc = "" +
 	"\telem_type\x18\x01 \x01(\v2\x11.protos.TypeProtoR\belemType\x1a[\n" +
 	"\fSparseTensor\x12\x1b\n" +
 	"\telem_type\x18\x01 \x01(\x05R\belemType\x12.\n" +
-	"\x05shape\x18\x02 \x01(\v2\x18.protos.TensorShapeProtoR\x05shape\x1a4\n" +
+	"\x05shape\x18\x02 \x01(\v2\x18.protos.TensorShapeProtoR\x05shape\x1aF\n" +
 	"\x06Opaque\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04nameB\a\n" +
+	"\x04name\x18\x02 \x01(\tR\x04nameJ\x04\b\x03\x10\x04R\n" +
+	"parametersB\a\n" +
 	"\x05value\"F\n" +
 	"\x12OperatorSetIdProto\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x18\n" +
@@ -3413,7 +3419,7 @@ const file_onnx_ml_proto_rawDesc = "" +
 	"\boverload\x18\r \x01(\tR\boverload\x125\n" +
 	"\n" +
 	"value_info\x18\f \x03(\v2\x16.protos.ValueInfoProtoR\tvalueInfo\x12E\n" +
-	"\x0emetadata_props\x18\x0e \x03(\v2\x1e.protos.StringStringEntryProtoR\rmetadataPropsJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\rsince_versionR\x06status*\xe7\x02\n" +
+	"\x0emetadata_props\x18\x0e \x03(\v2\x1e.protos.StringStringEntryProtoR\rmetadataPropsJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\rsince_versionR\x06status*\x82\x03\n" +
 	"\aVersion\x12\x12\n" +
 	"\x0e_START_VERSION\x10\x00\x12\x19\n" +
 	"\x15IR_VERSION_2017_10_10\x10\x01\x12\x19\n" +
@@ -3428,9 +3434,10 @@ const file_onnx_ml_proto_rawDesc = "" +
 	"\x14IR_VERSION_2024_3_25\x10\n" +
 	"\x12\x19\n" +
 	"\x15IR_VERSION_2025_05_12\x10\v\x12\x19\n" +
-	"\x15IR_VERSION_2025_08_26\x10\f\x12\x0e\n" +
+	"\x15IR_VERSION_2025_08_26\x10\f\x12\x19\n" +
+	"\x15IR_VERSION_2025_11_06\x10\r\x12\x0e\n" +
 	"\n" +
-	"IR_VERSION\x10\r*.\n" +
+	"IR_VERSION\x10\x0e*.\n" +
 	"\x0eOperatorStatus\x12\x10\n" +
 	"\fEXPERIMENTAL\x10\x00\x12\n" +
 	"\n" +
