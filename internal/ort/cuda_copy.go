@@ -17,37 +17,38 @@ typedef int (*cudaDeviceSynchronizeFn)(void);
 static cudaMemcpyFn resolved_cudaMemcpy = NULL;
 static cudaDeviceSynchronizeFn resolved_cudaDeviceSync = NULL;
 
-// Resolve cudaMemcpy — try RTLD_DEFAULT first, then explicitly load libcudart.
+// Resolve cudaMemcpy — try global process symbols first via dlopen(NULL), then explicitly load libcudart.
 // Returns 0 on success, -1 if the symbol cannot be found.
 static int resolve_cuda_symbols() {
     if (resolved_cudaMemcpy != NULL) return 0;
 
-    // Try 1: already in global symbol table.
-    resolved_cudaMemcpy = (cudaMemcpyFn)dlsym(RTLD_DEFAULT, "cudaMemcpy");
-    if (resolved_cudaMemcpy == NULL) {
-        // Try 2: explicitly load libcudart.so.
-        void* handle = dlopen("libcudart.so", RTLD_NOW | RTLD_GLOBAL);
-        if (handle == NULL) {
-            // Try versioned name.
-            handle = dlopen("libcudart.so.12", RTLD_NOW | RTLD_GLOBAL);
-        }
-        if (handle == NULL) {
-            handle = dlopen("libcudart.so.11", RTLD_NOW | RTLD_GLOBAL);
-        }
-        if (handle != NULL) {
-            resolved_cudaMemcpy = (cudaMemcpyFn)dlsym(handle, "cudaMemcpy");
-        }
+    // Try 1: already loaded in process symbol table (POSIX compliant using dlopen(NULL)).
+    void* handle = dlopen(NULL, RTLD_NOW | RTLD_GLOBAL);
+    if (handle != NULL) {
+        resolved_cudaMemcpy = (cudaMemcpyFn)dlsym(handle, "cudaMemcpy");
+        resolved_cudaDeviceSync = (cudaDeviceSynchronizeFn)dlsym(handle, "cudaDeviceSynchronize");
     }
-    if (resolved_cudaMemcpy == NULL) return -1;
 
-    resolved_cudaDeviceSync = (cudaDeviceSynchronizeFn)dlsym(RTLD_DEFAULT, "cudaDeviceSynchronize");
-    if (resolved_cudaDeviceSync == NULL) {
-        // Try from the handle we just opened.
-        void* handle = dlopen("libcudart.so", RTLD_NOW | RTLD_GLOBAL);
-        if (handle != NULL) {
-            resolved_cudaDeviceSync = (cudaDeviceSynchronizeFn)dlsym(handle, "cudaDeviceSynchronize");
+    // Try 2: explicitly load libcudart shared library if not found in global process symbols.
+    if (resolved_cudaMemcpy == NULL || resolved_cudaDeviceSync == NULL) {
+        void* lib_handle = dlopen("libcudart.so", RTLD_NOW | RTLD_GLOBAL);
+        if (lib_handle == NULL) {
+            lib_handle = dlopen("libcudart.so.12", RTLD_NOW | RTLD_GLOBAL);
+        }
+        if (lib_handle == NULL) {
+            lib_handle = dlopen("libcudart.so.11", RTLD_NOW | RTLD_GLOBAL);
+        }
+        if (lib_handle != NULL) {
+            if (resolved_cudaMemcpy == NULL) {
+                resolved_cudaMemcpy = (cudaMemcpyFn)dlsym(lib_handle, "cudaMemcpy");
+            }
+            if (resolved_cudaDeviceSync == NULL) {
+                resolved_cudaDeviceSync = (cudaDeviceSynchronizeFn)dlsym(lib_handle, "cudaDeviceSynchronize");
+            }
         }
     }
+
+    if (resolved_cudaMemcpy == NULL) return -1;
     return 0;
 }
 
