@@ -56,5 +56,17 @@ The backend automatically locates or manages the required ONNX Runtime shared li
 If graph compilation or session creation fails, setting the environment variable GOMLX_ONNX_SAVE_ON_FAILURE (or [SaveOnFailureEnv]) to a file path instructs the ONNX backend to save the serialized ONNX model protobuf bytes to that file path for debugging and log a notification:
 
 	GOMLX_ONNX_SAVE_ON_FAILURE="/tmp/failed_model.onnx"
+
+# Inspecting & Pretty-Printing `.onnx` Files
+
+The CLI tool in `github.com/gomlx/compute-onnx/cmd/onnx_printer` pretty-prints the contents of `.onnx` model files in the terminal, displaying model metadata, input/output tensors with GoMLX shapes ([shapes.Shape]), initializers/constants, and graph operations on a single line per op:
+
+	go run github.com/gomlx/compute-onnx/cmd/onnx_printer path/to/model.onnx
+
+Flags:
+  - max_items / n: Controls the maximum number of constant array elements printed (default 10).
+  - show_doc: Includes docstrings if present.
+
+For interactive graphical visualization of ONNX models, `.onnx` files can also be opened using Netron (https://netron.app/).
 */
 package onnxbackend
