@@ -191,6 +191,16 @@ func TestSaveOnFailureEnv(t *testing.T) {
 }
 
 func TestParseConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	cpuLibPath := filepath.Join(tempDir, "libonnxruntime.so")
+	_ = os.WriteFile(cpuLibPath, []byte("fake so"), 0644)
+
+	cudaDir := filepath.Join(tempDir, "cuda_ort")
+	_ = os.MkdirAll(cudaDir, 0755)
+	cudaLibPath := filepath.Join(cudaDir, "libonnxruntime.so")
+	_ = os.WriteFile(cudaLibPath, []byte("fake so"), 0644)
+	_ = os.WriteFile(filepath.Join(cudaDir, "libonnxruntime_providers_cuda.so"), []byte("fake cuda provider so"), 0644)
+
 	tests := []struct {
 		config            string
 		wantCuda          bool
@@ -201,8 +211,9 @@ func TestParseConfig(t *testing.T) {
 		{config: "cpu", wantCuda: false, wantLog: -1, wantCustomLibPath: ""},
 		{config: "cuda", wantCuda: true, wantLog: -1, wantCustomLibPath: ""},
 		{config: "cuda,log=2", wantCuda: true, wantLog: 1, wantCustomLibPath: ""},
-		{config: "/opt/onnxruntime/lib/libonnxruntime.so", wantCuda: HasNvidiaGPU(), wantLog: -1, wantCustomLibPath: "/opt/onnxruntime/lib/libonnxruntime.so"},
-		{config: "cuda,/opt/onnxruntime/lib/libonnxruntime.so", wantCuda: true, wantLog: -1, wantCustomLibPath: "/opt/onnxruntime/lib/libonnxruntime.so"},
+		{config: cpuLibPath, wantCuda: false, wantLog: -1, wantCustomLibPath: cpuLibPath},
+		{config: cudaLibPath, wantCuda: HasNvidiaGPU(), wantLog: -1, wantCustomLibPath: cudaLibPath},
+		{config: "cuda," + cpuLibPath, wantCuda: true, wantLog: -1, wantCustomLibPath: cpuLibPath},
 		{config: "invalid_option_xyz", wantErr: true},
 	}
 

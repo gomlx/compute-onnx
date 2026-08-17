@@ -184,12 +184,27 @@ func init() {
 	}
 }
 
+func isCUDALibraryAvailable(dir string) bool {
+	cudaLibPath := filepath.Join(dir, "libonnxruntime_providers_cuda.so")
+	if _, err := os.Stat(cudaLibPath); err == nil {
+		return true
+	}
+	cudaLibPathWin := filepath.Join(dir, "onnxruntime_providers_cuda.dll")
+	if _, err := os.Stat(cudaLibPathWin); err == nil {
+		return true
+	}
+	return false
+}
+
 func parseConfig(config string) (cuda bool, logSeverity int, customLibPath string, err error) {
 	cuda = false
 	hasProvider := false
 	logSeverity = -1 // not set
 
 	if config == "" {
+		if envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH"); envPath != "" {
+			return HasNvidiaGPU() && isCUDALibraryAvailable(filepath.Dir(envPath)), -1, "", nil
+		}
 		return HasNvidiaGPU(), -1, "", nil
 	}
 
@@ -235,7 +250,13 @@ func parseConfig(config string) (cuda bool, logSeverity int, customLibPath strin
 	}
 
 	if !hasProvider {
-		cuda = HasNvidiaGPU()
+		if customLibPath != "" {
+			cuda = HasNvidiaGPU() && isCUDALibraryAvailable(filepath.Dir(customLibPath))
+		} else if envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH"); envPath != "" {
+			cuda = HasNvidiaGPU() && isCUDALibraryAvailable(filepath.Dir(envPath))
+		} else {
+			cuda = HasNvidiaGPU()
+		}
 	}
 	return cuda, logSeverity, customLibPath, nil
 }
