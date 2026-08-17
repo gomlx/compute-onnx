@@ -215,9 +215,6 @@ func (t *bfloat16Tensor) GetData() any {
 }
 
 func toInt64s(dims []int) []int64 {
-	if len(dims) == 0 {
-		return []int64{1}
-	}
 	res := make([]int64, len(dims))
 	for i, v := range dims {
 		res[i] = int64(v)

@@ -22,9 +22,6 @@ import (
 
 func shapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
 	dims := shape.Dimensions
-	if len(dims) == 0 {
-		dims = []int{1}
-	}
 	onnxDims := make([]*onnx.TensorShapeProto_Dimension, len(dims))
 	for i, d := range dims {
 		if d == shapes.DynamicDim {
