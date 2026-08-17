@@ -9,6 +9,9 @@ import (
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/dtypes"
+	"github.com/gomlx/compute/dtypes/bfloat16"
+	"github.com/gomlx/compute/dtypes/float16"
+	"github.com/gomlx/compute/dtypes/gotype"
 	"github.com/gomlx/compute/notimplemented"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
@@ -91,6 +94,43 @@ func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
 	return n, nil
 }
 
+// MakeScalar constructs a 0D scalar constant tensor for the given value and DType.
+func MakeScalar[T gotype.NumericNotComplex](f *Function, value T, dtype dtypes.DType) (compute.Value, error) {
+	var flat any
+	switch dtype {
+	case dtypes.Float32:
+		flat = []float32{float32(value)}
+	case dtypes.Float64:
+		flat = []float64{float64(value)}
+	case dtypes.Int32:
+		flat = []int32{int32(value)}
+	case dtypes.Int64:
+		flat = []int64{int64(value)}
+	case dtypes.Int16:
+		flat = []int16{int16(value)}
+	case dtypes.Int8:
+		flat = []int8{int8(value)}
+	case dtypes.Uint8:
+		flat = []uint8{uint8(value)}
+	case dtypes.Uint16:
+		flat = []uint16{uint16(value)}
+	case dtypes.Uint32:
+		flat = []uint32{uint32(value)}
+	case dtypes.Uint64:
+		flat = []uint64{uint64(value)}
+	case dtypes.Float16:
+		flat = []float16.Float16{float16.FromFloat32(float32(value))}
+	case dtypes.BFloat16:
+		flat = []bfloat16.BFloat16{bfloat16.FromFloat32(float32(value))}
+	case dtypes.Bool:
+		flat = []bool{value != 0}
+	default:
+		return nil, errors.Errorf("unsupported DType %s for MakeScalar", dtype)
+	}
+
+	return f.Constant(flat)
+}
+
 func (f *Function) Name() string {
 	return f.name
 }
@@ -128,8 +168,6 @@ func (f *Function) Parameter(name string, shape shapes.Shape, spec *compute.Shar
 	f.nodes = append(f.nodes, node)
 	return node, nil
 }
-
-
 
 func (f *Function) Return(outputs []compute.Value, shardings []*compute.ShardingSpec) error {
 	f.returns = make([]*Node, len(outputs))

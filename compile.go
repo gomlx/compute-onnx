@@ -100,9 +100,6 @@ func constantToTensorProto(name string, shape shapes.Shape, flat any) *onnx.Tens
 	}
 
 	dims := shape.Dimensions
-	if len(dims) == 0 {
-		dims = []int{1}
-	}
 	onnxDims := make([]int64, len(dims))
 	for i, d := range dims {
 		onnxDims[i] = int64(d)

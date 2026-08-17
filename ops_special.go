@@ -756,3 +756,53 @@ func (f *Function) DynamicUpdateSlice(operand, update compute.Value, startIndice
 
 	return f.Where(fullMaskReshaped, paddedUpdate, opNode)
 }
+
+// Iota constructs a Range operator for the iotaAxis dimension and then broadcasts using Expand (BroadcastInDim).
+func (f *Function) Iota(shape shapes.Shape, iotaAxis int) (compute.Value, error) {
+	n := shape.Dimensions[iotaAxis]
+
+	rangeDType := shape.DType
+	castNeeded := false
+
+	switch shape.DType {
+	case dtypes.Float32, dtypes.Float64, dtypes.Int32, dtypes.Int64:
+		// Natively supported by ONNX Range
+	case dtypes.Float16, dtypes.BFloat16:
+		rangeDType = dtypes.Float32
+		castNeeded = true
+	case dtypes.Int8, dtypes.Int16, dtypes.Uint8, dtypes.Uint16, dtypes.Uint32, dtypes.Uint64, dtypes.Bool:
+		rangeDType = dtypes.Int64
+		castNeeded = true
+	default:
+		return nil, errors.Errorf("unsupported DType %s for Iota", shape.DType)
+	}
+
+	startNode, err := MakeScalar(f, 0, rangeDType)
+	if err != nil {
+		return nil, err
+	}
+	limitNode, err := MakeScalar(f, n, rangeDType)
+	if err != nil {
+		return nil, err
+	}
+	deltaNode, err := MakeScalar(f, 1, rangeDType)
+	if err != nil {
+		return nil, err
+	}
+
+	rangeNode := &Node{
+		opType: "Range",
+		inputs: []*Node{startNode.(*Node), limitNode.(*Node), deltaNode.(*Node)},
+		shape:  shapes.Make(rangeDType, n),
+	}
+	var rangeVal compute.Value = f.addNode(rangeNode)
+
+	if castNeeded {
+		rangeVal, err = f.ConvertDType(rangeVal, shape.DType)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return f.BroadcastInDim(rangeVal, shape, []int{iotaAxis})
+}
