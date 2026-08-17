@@ -52,6 +52,14 @@ See [an example in UCI-Adult demo](https://github.com/gomlx/gomlx/blob/main/exam
 GOMLX_BACKEND=onnx go run -tags=onnx ./examples/adult/demo/ -checkpoint "base" -save_onnx="/tmp/a.onnx" -vmodule=save_onnx=1
 ```
 
+## ONNX Runtime Shared Libraries & Auto-Installation
+
+The backend automatically locates or manages the required ONNX Runtime shared library (`libonnxruntime.so` / `onnxruntime.dll`):
+
+- **Custom Library Path**: Set the `ONNXRUNTIME_SHARED_LIBRARY_PATH` environment variable to point directly to the shared library binary.
+- **Auto-Installation**: If no library path is provided, the backend automatically downloads and extracts prebuilt official ONNX Runtime binaries locally (e.g. `~/.local/lib/onnxruntime/` on Linux).
+- **Disabling Auto-Installation**: Set the environment variable `GOMLX_NO_AUTO_INSTALL=1` to disable automatic downloads (useful for offline environments or container deployments).
+
 ## Debugging
 
 ### Saving Failed Models (`GOMLX_ONNX_SAVE_ON_FAILURE`)
