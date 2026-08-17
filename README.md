@@ -37,6 +37,10 @@ Configuration can be specified in the `GOMLX_BACKEND` environment variable using
   ```bash
   GOMLX_BACKEND=onnx:cuda
   ```
+- **Custom Library Path**: Specify an explicit path to the ONNX Runtime `.so` (or `.dylib` / `.dll`) shared library file. This explicitly bypasses `ONNXRUNTIME_SHARED_LIBRARY_PATH`.
+  ```bash
+  GOMLX_BACKEND=onnx:/path/to/libonnxruntime.so
+  ```
 - **empty (default)**: Automatically detects if an NVIDIA GPU is present via `nvidia-smi` and defaults to CUDA if available, otherwise falling back to CPU.
   ```bash
   GOMLX_BACKEND=onnx
@@ -56,9 +60,9 @@ GOMLX_BACKEND=onnx go run -tags=onnx ./examples/adult/demo/ -checkpoint "base" -
 
 The backend automatically locates or manages the required ONNX Runtime shared library (`libonnxruntime.so` / `onnxruntime.dll`):
 
-- **Custom Library Path**: Set the `ONNXRUNTIME_SHARED_LIBRARY_PATH` environment variable to point directly to the shared library binary.
+- **Custom Library Path**: Set the `ONNXRUNTIME_SHARED_LIBRARY_PATH` environment variable or pass an explicit library path in the backend configuration (e.g. `GOMLX_BACKEND=onnx:/path/to/libonnxruntime.so`) to point directly to the shared library binary. Passing an explicit path in the configuration bypasses `ONNXRUNTIME_SHARED_LIBRARY_PATH`.
 - **Auto-Installation**: If no library path is provided, the backend automatically downloads and extracts prebuilt official ONNX Runtime binaries locally (e.g. `~/.local/lib/onnxruntime/` on Linux).
-- **Disabling Auto-Installation**: Set the environment variable `GOMLX_NO_AUTO_INSTALL=1` to disable automatic downloads (useful for offline environments or container deployments).
+- **Disabling Auto-Installation**: Set the environment variable `GOMLX_NO_AUTO_INSTALL=1` or call `onnxbackend.EnableAutoInstall(false)` programmatically to disable automatic downloads (useful for offline environments or container deployments).
 
 ## Debugging
 

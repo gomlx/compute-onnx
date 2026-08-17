@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gomlx/compute"
@@ -188,4 +189,78 @@ func TestSaveOnFailureEnv(t *testing.T) {
 		t.Errorf("Expected failed model to be saved at %q, but file does not exist", savePath)
 	}
 }
+
+func TestParseConfig(t *testing.T) {
+	tests := []struct {
+		config            string
+		wantCuda          bool
+		wantLog           int
+		wantCustomLibPath string
+		wantErr           bool
+	}{
+		{config: "cpu", wantCuda: false, wantLog: -1, wantCustomLibPath: ""},
+		{config: "cuda", wantCuda: true, wantLog: -1, wantCustomLibPath: ""},
+		{config: "cuda,log=2", wantCuda: true, wantLog: 1, wantCustomLibPath: ""},
+		{config: "/opt/onnxruntime/lib/libonnxruntime.so", wantCuda: HasNvidiaGPU(), wantLog: -1, wantCustomLibPath: "/opt/onnxruntime/lib/libonnxruntime.so"},
+		{config: "cuda,/opt/onnxruntime/lib/libonnxruntime.so", wantCuda: true, wantLog: -1, wantCustomLibPath: "/opt/onnxruntime/lib/libonnxruntime.so"},
+		{config: "invalid_option_xyz", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.config, func(t *testing.T) {
+			gotCuda, gotLog, gotPath, err := parseConfig(tt.config)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseConfig(%q) error = %v, wantErr %v", tt.config, err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				if gotCuda != tt.wantCuda {
+					t.Errorf("gotCuda = %v, want %v", gotCuda, tt.wantCuda)
+				}
+				if gotLog != tt.wantLog {
+					t.Errorf("gotLog = %v, want %v", gotLog, tt.wantLog)
+				}
+				if gotPath != tt.wantCustomLibPath {
+					t.Errorf("gotCustomLibPath = %q, want %q", gotPath, tt.wantCustomLibPath)
+				}
+			}
+		})
+	}
+}
+
+func TestEnableAutoInstall(t *testing.T) {
+	EnableAutoInstall(false)
+	if autoInstall != false {
+		t.Errorf("expected autoInstall to be false after EnableAutoInstall(false)")
+	}
+	EnableAutoInstall(true)
+	if autoInstall != true {
+		t.Errorf("expected autoInstall to be true after EnableAutoInstall(true)")
+	}
+}
+
+func TestExplicitPathNoAutoInstall(t *testing.T) {
+	initMutex.Lock()
+	wasInitialized := isOrtInitialized
+	isOrtInitialized = false
+	initMutex.Unlock()
+
+	defer func() {
+		initMutex.Lock()
+		isOrtInitialized = wasInitialized
+		initMutex.Unlock()
+	}()
+
+	EnableAutoInstall(true)
+	nonExistentPath := filepath.Join(t.TempDir(), "nonexistent_libonnxruntime.so")
+
+	err := initializeORT(false, nonExistentPath)
+	if err == nil {
+		t.Fatal("expected error when explicit path does not exist, got nil")
+	}
+	if !strings.Contains(err.Error(), "ONNX Runtime library not found at specified path") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+
 

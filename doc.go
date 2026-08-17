@@ -29,6 +29,8 @@ Accelerator Selection:
     GOMLX_BACKEND=onnx:cpu
   - cuda / gpu: Force CUDA GPU execution using ONNX Runtime CUDA Execution Provider via IoBinding.
     GOMLX_BACKEND=onnx:cuda
+  - <path/to/libonnxruntime.so>: Explicit path to the ONNX Runtime shared library file (bypasses ONNXRUNTIME_SHARED_LIBRARY_PATH).
+    GOMLX_BACKEND=onnx:/path/to/libonnxruntime.so
   - (empty / default): Automatically detects if an NVIDIA GPU is available and defaults to CUDA, falling back to CPU otherwise.
     GOMLX_BACKEND=onnx
 
@@ -47,9 +49,9 @@ Example:
 
 The backend automatically locates or manages the required ONNX Runtime shared library (libonnxruntime.so / onnxruntime.dll):
 
-  - Custom Library Path: Set the ONNXRUNTIME_SHARED_LIBRARY_PATH environment variable to point directly to the shared library binary.
+  - Custom Library Path: Set the ONNXRUNTIME_SHARED_LIBRARY_PATH environment variable or pass an explicit library path in the configuration string (e.g. "onnx:/path/to/libonnxruntime.so") to point directly to the shared library binary. Specifying an explicit path in the configuration string bypasses ONNXRUNTIME_SHARED_LIBRARY_PATH.
   - Auto-Installation: If no library path is provided, the backend automatically downloads and extracts prebuilt official ONNX Runtime binaries locally (e.g. ~/.local/lib/onnxruntime/ on Linux).
-  - Disabling Auto-Installation: Set the environment variable GOMLX_NO_AUTO_INSTALL=1 (or [NoAutoInstallEnv]) to disable automatic downloads (useful for offline environments or container deployments).
+  - Disabling Auto-Installation: Set the environment variable GOMLX_NO_AUTO_INSTALL=1 (or [NoAutoInstallEnv]), or call [EnableAutoInstall](false) programmatically before initializing the backend to disable automatic downloads (useful for offline environments or container deployments).
 
 # Debugging & Saving Models on Failure
 
