@@ -17,7 +17,7 @@ import (
 
 const (
 	onnxGitHubRawUrl = "https://raw.githubusercontent.com/onnx/onnx/main/onnx/"
-	goProtosPackage  = "github.com/gomlx/compute-onnx/internal/protos"
+	goProtosPackage  = "github.com/gomlx/compute-onnx/support/protos"
 )
 
 var protoFiles = []string{
@@ -37,10 +37,10 @@ func main() {
 	must(err)
 
 	var targetDir string
-	if filepath.Base(cwd) == "protos" && filepath.Base(filepath.Dir(cwd)) == "internal" {
+	if filepath.Base(cwd) == "protos" && filepath.Base(filepath.Dir(cwd)) == "support" {
 		targetDir = cwd
 	} else {
-		targetDir = filepath.Join(cwd, "internal", "protos")
+		targetDir = filepath.Join(cwd, "support", "protos")
 	}
 
 	must(os.MkdirAll(targetDir, 0755))

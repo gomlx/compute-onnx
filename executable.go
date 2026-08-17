@@ -9,7 +9,7 @@ import (
 
 	"github.com/gomlx/compute"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
-	onnx "github.com/gomlx/compute-onnx/internal/protos"
+	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 	"github.com/gomlx/compute/support/humanize"

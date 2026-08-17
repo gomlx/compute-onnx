@@ -4,7 +4,7 @@ package onnxbackend
 
 import (
 	"github.com/gomlx/compute"
-	onnx "github.com/gomlx/compute-onnx/internal/protos"
+	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/notimplemented"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
