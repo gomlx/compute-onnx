@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gomlx/compute"
@@ -150,6 +151,41 @@ func TestMakeScalar(t *testing.T) {
 	}
 	if gotInt != int64(100) {
 		t.Errorf("Expected int64(100), got %v", gotInt)
+	}
+}
+
+func TestSaveOnFailureEnv(t *testing.T) {
+	b, err := New("")
+	if err != nil {
+		t.Fatalf("Failed to create backend: %+v", err)
+	}
+	defer b.Finalize()
+
+	tempDir := t.TempDir()
+	savePath := filepath.Join(tempDir, "failed_model_test.onnx")
+	t.Setenv(SaveOnFailureEnv, savePath)
+
+	builder := b.Builder("test_failure").(*Builder)
+	fn := builder.Main().(*Function)
+	param, err := fn.Parameter("x", shapes.Make(dtypes.Float32, 2, 2), nil)
+	if err != nil {
+		t.Fatalf("Failed to create parameter: %+v", err)
+	}
+	invalidNode := &Node{
+		opType: "InvalidOpNameThatDoesNotExistInONNX",
+		inputs: []*Node{param.(*Node)},
+		shape:  shapes.Make(dtypes.Float32, 2, 2),
+	}
+	fn.addNode(invalidNode)
+	fn.Return([]compute.Value{invalidNode}, nil)
+
+	_, compileErr := builder.Compile()
+	if compileErr == nil {
+		t.Fatal("Expected compilation to fail for invalid op, but it succeeded")
+	}
+
+	if _, statErr := os.Stat(savePath); os.IsNotExist(statErr) {
+		t.Errorf("Expected failed model to be saved at %q, but file does not exist", savePath)
 	}
 }
 

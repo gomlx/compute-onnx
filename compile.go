@@ -291,7 +291,13 @@ func (b *Builder) Compile() (compute.Executable, error) {
 
 	session, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inputNames, outputNames, options)
 	if err != nil {
-		_ = os.WriteFile("failed_model.onnx", modelBytes, 0644)
+		if filePath := os.Getenv(SaveOnFailureEnv); filePath != "" {
+			if wErr := os.WriteFile(filePath, modelBytes, 0644); wErr == nil {
+				klog.Infof("Saving failed model to %q ($%s)", filePath, SaveOnFailureEnv)
+			} else {
+				klog.Errorf("Failed to save failed model to %q ($%s): %+v", filePath, SaveOnFailureEnv, wErr)
+			}
+		}
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime session")
 	}
 
