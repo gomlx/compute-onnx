@@ -54,6 +54,18 @@ See [an example in UCI-Adult demo](https://github.com/gomlx/gomlx/blob/main/exam
 GOMLX_BACKEND=onnx go run -tags=onnx ./examples/adult/demo/ -checkpoint "base" -save_onnx="/tmp/a.onnx" -vmodule=save_onnx=1
 ```
 
+## Debugging
+
+### Saving Failed Models (`GOMLX_ONNX_SAVE_ON_FAILURE`)
+
+If graph compilation or session creation fails in ONNX Runtime, setting the `GOMLX_ONNX_SAVE_ON_FAILURE` environment variable instructs the backend to automatically save the serialized ONNX model protobuf to the specified file path before returning the compilation error:
+
+```bash
+GOMLX_ONNX_SAVE_ON_FAILURE="/tmp/failed_model.onnx" go run -tags=onnx ...
+```
+
+This allows you to inspect the invalid graph using `onnx_printer` or [Netron](https://netron.app/) to diagnose the failure.
+
 ### Inspecting `.onnx` Files (`onnx_printer`)
 
 This repository includes a CLI tool in `cmd/onnx_printer` to inspect and pretty-print `.onnx` model files in the terminal:
@@ -95,3 +107,4 @@ cat /tmp/model.onnx | go run github.com/gomlx/compute-onnx/cmd/onnx_printer
   ```bash
   GOMLX_BACKEND=onnx:cuda go run -tags=onnx github.com/gomlx/gomlx/examples/adult/demo -vmodule=executable=1
   ```
+
