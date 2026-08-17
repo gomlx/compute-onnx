@@ -55,39 +55,70 @@ func getSupportedOps() map[compute.OpType]bool {
 	return ops
 }
 
-func initializeORT(cuda bool) error {
+// EnableAutoInstall controls whether the backend automatically downloads and installs
+// prebuilt ONNX Runtime shared libraries if none are found.
+// Auto-installation is enabled by default unless the GOMLX_NO_AUTO_INSTALL environment
+// variable is set.
+func EnableAutoInstall(enable bool) {
+	initMutex.Lock()
+	defer initMutex.Unlock()
+	autoInstall = enable
+}
+
+func isLibraryPath(part string) bool {
+	partLower := strings.ToLower(part)
+	if strings.HasSuffix(partLower, ".so") || strings.HasSuffix(partLower, ".dylib") || strings.HasSuffix(partLower, ".dll") {
+		return true
+	}
+	if strings.Contains(part, "/") || strings.Contains(part, "\\") {
+		return true
+	}
+	if info, err := os.Stat(part); err == nil && !info.IsDir() {
+		return true
+	}
+	return false
+}
+
+func initializeORT(cuda bool, customLibPath string) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if isOrtInitialized {
 		return nil
 	}
 
-	path := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
+	path := customLibPath
 	if path == "" {
-		installDir, err := onnxruntime.GetInstallPath()
-		if err == nil {
-			libFilename, err := onnxruntime.GetLibFilename()
+		path = os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
+		if path == "" {
+			installDir, err := onnxruntime.GetInstallPath()
 			if err == nil {
-				targetPath := filepath.Join(installDir, libFilename)
-				if _, err := os.Stat(targetPath); err == nil {
-					useInstalled := true
-					if cuda {
-						cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
-						if _, err := os.Stat(cudaLibPath); err != nil {
-							useInstalled = false
+				libFilename, err := onnxruntime.GetLibFilename()
+				if err == nil {
+					targetPath := filepath.Join(installDir, libFilename)
+					if _, err := os.Stat(targetPath); err == nil {
+						useInstalled := true
+						if cuda {
+							cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
+							if _, err := os.Stat(cudaLibPath); err != nil {
+								useInstalled = false
+							}
 						}
-					}
-					if useInstalled {
-						path = targetPath
+						if useInstalled {
+							path = targetPath
+						}
 					}
 				}
 			}
 		}
 	}
 
-	if path == "" {
+	if path != "" {
+		if _, err := os.Stat(path); err != nil {
+			return errors.Wrapf(err, "ONNX Runtime library not found at specified path %q", path)
+		}
+	} else {
 		if !autoInstall {
-			return errors.Errorf("ONNX Runtime library not found at ONNXRUNTIME_SHARED_LIBRARY_PATH and auto-installation is disabled via %s", NoAutoInstallEnv)
+			return errors.Errorf("ONNX Runtime library not found (ONNXRUNTIME_SHARED_LIBRARY_PATH is not set) and auto-installation is disabled via %s or EnableAutoInstall(false)", NoAutoInstallEnv)
 		}
 		var err error
 		path, err = onnxruntime.Install(onnxruntime.DefaultVersion, cuda, false)
@@ -153,13 +184,13 @@ func init() {
 	}
 }
 
-func parseConfig(config string) (cuda bool, logSeverity int, err error) {
+func parseConfig(config string) (cuda bool, logSeverity int, customLibPath string, err error) {
 	cuda = false
 	hasProvider := false
 	logSeverity = -1 // not set
 
 	if config == "" {
-		return HasNvidiaGPU(), -1, nil
+		return HasNvidiaGPU(), -1, "", nil
 	}
 
 	parts := strings.SplitSeq(config, ",")
@@ -175,7 +206,7 @@ func parseConfig(config string) (cuda bool, logSeverity int, err error) {
 			if key == "log" {
 				var level int
 				if _, err := fmt.Sscanf(val, "%d", &level); err != nil {
-					return false, 0, errors.Errorf("invalid log level: %q", val)
+					return false, 0, "", errors.Errorf("invalid log level: %q", val)
 				}
 				// Map level to ORT severity (higher level = more verbose):
 				// level=0 -> severity=3 (ERROR)
@@ -185,7 +216,7 @@ func parseConfig(config string) (cuda bool, logSeverity int, err error) {
 				severity := max(3-level, 0)
 				logSeverity = severity
 			} else {
-				return false, 0, errors.Errorf("unknown config option: %q", key)
+				return false, 0, "", errors.Errorf("unknown config option: %q", key)
 			}
 		} else {
 			partLower := strings.ToLower(part)
@@ -195,8 +226,10 @@ func parseConfig(config string) (cuda bool, logSeverity int, err error) {
 			} else if partLower == "cpu" {
 				cuda = false
 				hasProvider = true
+			} else if isLibraryPath(part) {
+				customLibPath = part
 			} else {
-				return false, 0, errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"gpu\", or key=value option", part)
+				return false, 0, "", errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"gpu\", path to ORT library, or key=value option", part)
 			}
 		}
 	}
@@ -204,7 +237,7 @@ func parseConfig(config string) (cuda bool, logSeverity int, err error) {
 	if !hasProvider {
 		cuda = HasNvidiaGPU()
 	}
-	return cuda, logSeverity, nil
+	return cuda, logSeverity, customLibPath, nil
 }
 
 func New(config string) (compute.Backend, error) {
@@ -212,7 +245,7 @@ func New(config string) (compute.Backend, error) {
 		return nil, errors.Errorf("onnxruntime backend is not supported on platform %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
-	cuda, logSeverity, err := parseConfig(config)
+	cuda, logSeverity, customLibPath, err := parseConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +257,7 @@ func New(config string) (compute.Backend, error) {
 		}
 	}
 
-	err = initializeORT(cuda)
+	err = initializeORT(cuda, customLibPath)
 	if err != nil {
 		return nil, err
 	}
