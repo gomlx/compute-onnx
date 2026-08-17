@@ -3,9 +3,7 @@
 [![Documentation](https://img.shields.io/badge/docs-gomlx.github.io-blue.svg)](https://gomlx.github.io/)
 [![Sponsor GoMLX](https://img.shields.io/badge/Sponsor-GoMLX-white?logo=github&style=flat-square)](https://github.com/gomlx/gomlx/blob/main/README.md#-support-the-project)
 
-🚧🏗️ **EXPERIMENTAL** 🏗️🚧
-
-ONNX Runtime based compute backend for GoMLX.
+**ONNX Runtime** based compute backend for GoMLX.
 
 It allows GoMLX models to be executed via ONNX Runtime using either CPU or CUDA (NVIDIA GPU).
 
@@ -108,3 +106,8 @@ cat /tmp/model.onnx | go run github.com/gomlx/compute-onnx/cmd/onnx_printer
   GOMLX_BACKEND=onnx:cuda go run -tags=onnx github.com/gomlx/gomlx/examples/adult/demo -vmodule=executable=1
   ```
 
+##  💖 Thanks
+
+* [Go](golang.org)
+* [ONNX](https://onnx.ai/)
+* [ONNX Runtime](https://onnxruntime.ai/)
