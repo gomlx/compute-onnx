@@ -109,3 +109,26 @@ func TestGetLatestVersion(t *testing.T) {
 		t.Errorf("GetLatestVersion(true) = %q; want \"1.27.0\" on CUDA <= 12.4", ver)
 	}
 }
+
+func TestNormalizeVersion(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"1.29", "1.29.0"},
+		{"v1.29", "1.29.0"},
+		{"V1.29", "1.29.0"},
+		{"1.29.0", "1.29.0"},
+		{"v1.29.0", "1.29.0"},
+		{"1.27", "1.27.1"},
+		{"v1.24", "1.24.4"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		got := NormalizeVersion(tt.input)
+		if got != tt.expected {
+			t.Errorf("NormalizeVersion(%q) = %q; want %q", tt.input, got, tt.expected)
+		}
+	}
+}

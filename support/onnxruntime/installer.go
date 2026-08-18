@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -172,8 +173,76 @@ func parseCudaVersionFromOutput(s string) string {
 	return ""
 }
 
+type githubRelease struct {
+	TagName string `json:"tag_name"`
+}
+
+// ResolveLatestPatchVersion queries GitHub releases to find the highest patch version for a given major.minor string (e.g. "1.27" -> "1.27.1").
+func ResolveLatestPatchVersion(majorMinor string) string {
+	resp, err := http.Get("https://api.github.com/repos/microsoft/onnxruntime/releases?per_page=100")
+	if err != nil {
+		return majorMinor + ".0"
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return majorMinor + ".0"
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return majorMinor + ".0"
+	}
+
+	var releases []githubRelease
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return majorMinor + ".0"
+	}
+
+	prefix := "v" + majorMinor + "."
+	highestPatch := -1
+
+	for _, rel := range releases {
+		tag := strings.TrimSpace(rel.TagName)
+		if strings.HasPrefix(tag, prefix) {
+			patchStr := strings.TrimPrefix(tag, prefix)
+			patchParts := strings.Split(patchStr, "-")
+			if patchVal, err := strconv.Atoi(patchParts[0]); err == nil {
+				if patchVal > highestPatch {
+					highestPatch = patchVal
+				}
+			}
+		}
+	}
+
+	if highestPatch >= 0 {
+		return fmt.Sprintf("%s.%d", majorMinor, highestPatch)
+	}
+	return majorMinor + ".0"
+}
+
+// NormalizeVersion cleans up user-provided version strings (e.g., "v1.29.0", "v1.29", "1.29") into standard semver "1.29.0".
+// If a 2-part version is provided (e.g., "1.27" or "v1.27"), it queries GitHub releases to find the latest patch version (e.g., "1.27.1").
+func NormalizeVersion(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "V")
+	if v == "" {
+		return ""
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) == 1 {
+		return ResolveLatestPatchVersion(v + ".0")
+	}
+	if len(parts) == 2 {
+		return ResolveLatestPatchVersion(v)
+	}
+	return v
+}
+
 // GetAssetURL returns the download URL for the given version, platform, and cuda setting.
 func GetAssetURL(version string, cuda bool, cudaVersion string) (string, error) {
+	version = NormalizeVersion(version)
 	var platform string
 	var extension string
 
@@ -240,6 +309,7 @@ func GetAssetURL(version string, cuda bool, cudaVersion string) (string, error) 
 			candidates = append(candidates, "gpu_cuda13")
 		}
 
+		var attempted []string
 		for _, suffix := range candidates {
 			candidatePlatform := fmt.Sprintf("%s-%s", platform, suffix)
 			archiveName := fmt.Sprintf("onnxruntime-%s-%s%s", candidatePlatform, version, extension)
@@ -252,14 +322,33 @@ func GetAssetURL(version string, cuda bool, cudaVersion string) (string, error) 
 				if resp.StatusCode == http.StatusOK {
 					return url, nil
 				}
+				attempted = append(attempted, fmt.Sprintf("  - %s (HTTP %s)", url, resp.Status))
+			} else {
+				attempted = append(attempted, fmt.Sprintf("  - %s (Error: %v)", url, err))
 			}
 		}
 
-		return "", errors.Errorf("failed to find a valid CUDA package URL for version %s on platform %s with CUDA version %s", version, platform, cudaVersion)
+		return "", errors.Errorf(
+			"failed to find a valid CUDA package URL for version %s on platform %s with CUDA version %s.\nAttempted URLs:\n%s",
+			version, platform, cudaVersion, strings.Join(attempted, "\n"),
+		)
 	}
 
 	archiveName := fmt.Sprintf("onnxruntime-%s-%s%s", platform, version, extension)
-	return fmt.Sprintf("%s/v%s/%s", RepoURL, version, archiveName), nil
+	url := fmt.Sprintf("%s/v%s/%s", RepoURL, version, archiveName)
+	resp, err := http.Head(url)
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return "", errors.Errorf(
+				"failed to find a valid package URL for version %s on platform %s.\nAttempted URL:\n  - %s (HTTP %s)",
+				version, platform, url, resp.Status,
+			)
+		}
+	} else {
+		return "", errors.Wrapf(err, "failed to check package URL %s", url)
+	}
+	return url, nil
 }
 
 // GetCUDAFullVersion attempts to return the full CUDA version string (e.g. "12.4" or "12.4.131") found on the system.
@@ -420,6 +509,7 @@ func GetLatestVersion(cuda bool) (string, error) {
 // Install downloads and installs the ONNX Runtime library if not already present.
 // It returns the absolute path to the main shared library file.
 func Install(version string, cuda bool, cudaVersion string, targetDir string, force bool) (string, error) {
+	version = NormalizeVersion(version)
 	if version == "" {
 		version = DefaultVersion
 	}
