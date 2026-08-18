@@ -1,0 +1,111 @@
+// Copyright 2023-2026 The GoMLX Authors. SPDX-License-Identifier: Apache-2.0
+
+package onnxruntime
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestGetDefaultCUDAVersion(t *testing.T) {
+	ver := GetDefaultCUDAVersion()
+	if ver == "" {
+		t.Errorf("GetDefaultCUDAVersion returned empty string")
+	}
+	t.Logf("Detected default CUDA version: %s", ver)
+}
+
+func TestCleanCudaVersion(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"cuda12", "12"},
+		{"CUDA12", "12"},
+		{"v12", "12"},
+		{"12.4", "12"},
+		{"cuda12.4.131", "12"},
+		{"13", "13"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		got := cleanCudaVersion(tt.input)
+		if got != tt.expected {
+			t.Errorf("cleanCudaVersion(%q) = %q; want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestParseCudaVersionFromOutput(t *testing.T) {
+	sampleNvccOut := `nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2024 NVIDIA Corporation
+Built on Thu_Mar_28_02:18:24_PDT_2024
+Cuda compilation tools, release 12.4, V12.4.131
+Build cuda_12.4.r12.4/compiler.34097967_0`
+
+	ver := parseCudaVersionFromOutput(sampleNvccOut)
+	if ver != "12" {
+		t.Errorf("parseCudaVersionFromOutput sample nvcc out: got %q; want \"12\"", ver)
+	}
+}
+
+func TestGetAssetURLWithCudaVersion(t *testing.T) {
+	// Test CPU asset URL
+	urlCPU, err := GetAssetURL("1.27.0", false, "")
+	if err != nil {
+		t.Fatalf("GetAssetURL CPU failed: %+v", err)
+	}
+	if urlCPU == "" {
+		t.Errorf("GetAssetURL CPU returned empty URL")
+	}
+
+	// Test CUDA asset URL with explicit CUDA version "12"
+	urlCUDA12, err := GetAssetURL("1.27.0", true, "12")
+	if err != nil {
+		t.Fatalf("GetAssetURL CUDA 12 failed: %+v", err)
+	}
+	if urlCUDA12 == "" {
+		t.Errorf("GetAssetURL CUDA 12 returned empty URL")
+	}
+}
+
+func TestInstallWithCustomTarget(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "ort-install-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %+v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	targetDir := filepath.Join(tmpDir, "custom_ort")
+	libPath, err := Install("1.27.0", false, "", targetDir, false)
+	if err != nil {
+		t.Fatalf("Install to custom target failed: %+v", err)
+	}
+
+	expectedLib, err := GetLibFilename()
+	if err != nil {
+		t.Fatalf("GetLibFilename failed: %+v", err)
+	}
+	expectedPath := filepath.Join(targetDir, expectedLib)
+
+	if libPath != expectedPath {
+		t.Errorf("Install returned libPath %q; want %q", libPath, expectedPath)
+	}
+
+	if _, err := os.Stat(libPath); err != nil {
+		t.Errorf("Installed library does not exist at %q", libPath)
+	}
+}
+
+func TestGetLatestVersion(t *testing.T) {
+	ver, err := GetLatestVersion(true)
+	if err != nil {
+		t.Fatalf("GetLatestVersion(true) failed: %+v", err)
+	}
+	t.Logf("GetLatestVersion(true) returned: %s", ver)
+	if isCUDAVersionLE12_4(GetCUDAFullVersion()) && ver != "1.27.0" {
+		t.Errorf("GetLatestVersion(true) = %q; want \"1.27.0\" on CUDA <= 12.4", ver)
+	}
+}

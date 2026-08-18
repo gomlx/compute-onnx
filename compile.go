@@ -7,15 +7,16 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/gomlx/compute"
+	ort "github.com/gomlx/compute-onnx/internal/ort"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
 	"github.com/gomlx/compute/dtypes/float16"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
-	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/klog/v2"
 )
@@ -277,7 +278,7 @@ func (b *Builder) Compile() (compute.Executable, error) {
 
 		err = options.AppendExecutionProviderCUDA(cudaOpts)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to append CUDA execution provider to SessionOptions")
+			return nil, wrapCUDAError(errors.Wrap(err, "failed to append CUDA execution provider to SessionOptions"))
 		}
 	}
 
@@ -299,8 +300,21 @@ func (b *Builder) Compile() (compute.Executable, error) {
 				klog.Errorf("Failed to save failed model to %q ($%s): %+v", filePath, SaveOnFailureEnv, wErr)
 			}
 		}
-		return nil, errors.Wrap(err, "failed to create ONNX Runtime session")
+		return nil, wrapCUDAError(errors.Wrap(err, "failed to create ONNX Runtime session"))
 	}
 
 	return newExecutable(b.backend, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto), nil
+}
+
+func wrapCUDAError(err error) error {
+	if err == nil {
+		return nil
+	}
+	errStr := err.Error()
+	if strings.Contains(errStr, "cudaLibraryGetKernel") ||
+		strings.Contains(errStr, "OrtSessionOptionsAppendExecutionProvider_Cuda: Failed to load shared library") ||
+		(strings.Contains(errStr, "AppendExecutionProvider_Cuda") && strings.Contains(errStr, "Failed to load")) {
+		return errors.WithMessage(err, "CUDA versions <= 12.4 are compatible only with ORT (ONNX Runtime) up to v1.27. Maybe install an earlier version of ORT ? (see github.com/gomlx/compute-onnx/cmd/onnxruntime_installer)")
+	}
+	return err
 }

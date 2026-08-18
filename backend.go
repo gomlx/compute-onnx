@@ -121,7 +121,7 @@ func initializeORT(cuda bool, customLibPath string) error {
 			return errors.Errorf("ONNX Runtime library not found (ONNXRUNTIME_SHARED_LIBRARY_PATH is not set) and auto-installation is disabled via %s or EnableAutoInstall(false)", NoAutoInstallEnv)
 		}
 		var err error
-		path, err = onnxruntime.Install(onnxruntime.DefaultVersion, cuda, false)
+		path, err = onnxruntime.Install(onnxruntime.DefaultVersion, cuda, "", "", false)
 		if err != nil {
 			return errors.Wrap(err, "failed to automatically install ONNX Runtime library")
 		}
