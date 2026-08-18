@@ -196,11 +196,53 @@ func isCUDALibraryAvailable(dir string) bool {
 	return false
 }
 
+// ParseGOMLXBackendEnv parses a GOMLX_BACKEND environment variable string (e.g. "onnx:cpu", "onnx", "onnxruntime:cuda,log=2").
+// It verifies that the backend selection is "onnx" or "onnxruntime", strips the backend name prefix, and returns the configuration options string.
+// For example:
+//   "onnx:cpu"           -> "cpu", nil
+//   "onnx"               -> "", nil
+//   "onnxruntime:cuda"   -> "cuda", nil
+//   "openxla:cuda"       -> "", error
+func ParseGOMLXBackendEnv(envVal string) (string, error) {
+	envVal = strings.TrimSpace(envVal)
+	if envVal == "" {
+		return "", nil
+	}
+	parts := strings.SplitN(envVal, ":", 2)
+	backendName := strings.ToLower(strings.TrimSpace(parts[0]))
+	if backendName != "onnx" && backendName != "onnxruntime" {
+		return "", errors.Errorf("invalid backend selection %q in GOMLX_BACKEND: expected backend 'onnx' or 'onnxruntime'", parts[0])
+	}
+	if len(parts) > 1 {
+		return strings.TrimSpace(parts[1]), nil
+	}
+	return "", nil
+}
+
 func parseConfig(config string) (cuda bool, logSeverity int, customLibPath string, err error) {
 	cuda = false
 	hasProvider := false
 	logSeverity = -1 // not set
 
+	if config == "" {
+		if envVal := os.Getenv("GOMLX_BACKEND"); envVal != "" {
+			var errEnv error
+			config, errEnv = ParseGOMLXBackendEnv(envVal)
+			if errEnv != nil {
+				return false, 0, "", errEnv
+			}
+		}
+	} else if strings.Contains(config, ":") || strings.EqualFold(config, "onnx") || strings.EqualFold(config, "onnxruntime") {
+		// If caller passed GOMLX_BACKEND style string directly e.g. "onnx:cpu" or "onnx"
+		parsed, errEnv := ParseGOMLXBackendEnv(config)
+		if errEnv == nil {
+			config = parsed
+		} else if !isLibraryPath(config) && !strings.Contains(config, "=") {
+			return false, 0, "", errEnv
+		}
+	}
+
+	config = strings.TrimSpace(config)
 	if config == "" {
 		if envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH"); envPath != "" {
 			return HasNvidiaGPU() && isCUDALibraryAvailable(filepath.Dir(envPath)), -1, "", nil

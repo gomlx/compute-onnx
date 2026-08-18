@@ -32,10 +32,15 @@ func init() {
 
 func setup() {
 	fmt.Printf("Available backends: %q\n", compute.List())
-	var err error
-	backend, err = New("")
+	envVal := os.Getenv("GOMLX_BACKEND")
+	config, err := ParseGOMLXBackendEnv(envVal)
 	if err != nil {
-		klog.Fatalf("Failed to create backend: %+v", err)
+		klog.Fatalf("Failed to parse GOMLX_BACKEND: %+v", err)
+	}
+	var errNew error
+	backend, errNew = New(config)
+	if errNew != nil {
+		klog.Fatalf("Failed to create backend: %+v", errNew)
 	}
 	fmt.Printf("Backend: %s, %s\n", backend.Name(), backend.Description())
 }
@@ -211,6 +216,10 @@ func TestParseConfig(t *testing.T) {
 		{config: "cpu", wantCuda: false, wantLog: -1, wantCustomLibPath: ""},
 		{config: "cuda", wantCuda: true, wantLog: -1, wantCustomLibPath: ""},
 		{config: "cuda,log=2", wantCuda: true, wantLog: 1, wantCustomLibPath: ""},
+		{config: "onnx:cpu", wantCuda: false, wantLog: -1, wantCustomLibPath: ""},
+		{config: "onnxruntime:cuda", wantCuda: true, wantLog: -1, wantCustomLibPath: ""},
+		{config: "onnx:cuda,log=2", wantCuda: true, wantLog: 1, wantCustomLibPath: ""},
+		{config: "openxla:cuda", wantErr: true},
 		{config: cpuLibPath, wantCuda: false, wantLog: -1, wantCustomLibPath: cpuLibPath},
 		{config: cudaLibPath, wantCuda: HasNvidiaGPU(), wantLog: -1, wantCustomLibPath: cudaLibPath},
 		{config: "cuda," + cpuLibPath, wantCuda: true, wantLog: -1, wantCustomLibPath: cpuLibPath},
@@ -273,5 +282,22 @@ func TestExplicitPathNoAutoInstall(t *testing.T) {
 	}
 }
 
+func TestConvGeneralFloat64(t *testing.T) {
+	t.Run("CPU", func(t *testing.T) {
+		b, err := New("cpu")
+		if err != nil {
+			t.Fatalf("Failed to create CPU backend: %+v", err)
+		}
+		defer b.Finalize()
+		backendtest.TestConvGeneral(t, b, nil)
+	})
 
-
+	t.Run("CUDA", func(t *testing.T) {
+		b, err := New("cuda")
+		if err != nil {
+			t.Fatalf("Failed to create CUDA backend: %+v", err)
+		}
+		defer b.Finalize()
+		backendtest.TestConvGeneral(t, b, nil)
+	})
+}

@@ -146,11 +146,11 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 		})
 	}
 
-	// ONNX Conv operator only supports floating point types (Float32, Float64, Float16, BFloat16).
-	// If inputs are integer types, cast them to Float32 first.
+	// ONNX Conv operator in ONNX Runtime computes Conv outputs using Float32 buffers.
+	// Cast integer and Float64 inputs to Float32 before Conv execution and cast output back.
 	origDType := outShape.DType
-	isInteger := !origDType.IsFloat()
-	if isInteger {
+	needCastToFloat32 := !origDType.IsFloat() || origDType == dtypes.Float64
+	if needCastToFloat32 {
 		var errCast error
 		inpVal, errCast = f.ConvertDType(inpVal, dtypes.Float32)
 		if errCast != nil {
@@ -164,7 +164,7 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 
 	// 4. Construct intermediate NCHW output shape for Conv node
 	convOutDType := outShape.DType
-	if isInteger {
+	if needCastToFloat32 {
 		convOutDType = dtypes.Float32
 	}
 	convOutDims := make([]int, rank)
@@ -211,7 +211,7 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 		}
 	}
 
-	if isInteger {
+	if needCastToFloat32 {
 		return f.ConvertDType(finalVal, origDType)
 	}
 
