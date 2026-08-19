@@ -38,16 +38,14 @@ func CreateSession(modelBytes []byte, executionProvider string) (*Session, error
 
 	// Create session options
 	options := global.Get("Object").New()
-	if executionProvider != "" {
-		eps := global.Get("Array").New(1)
-		eps.SetIndex(0, executionProvider)
-		options.Set("executionProviders", eps)
+	eps := global.Get("Array").New()
+	if executionProvider != "" && executionProvider != "wasm" {
+		eps.Call("push", executionProvider)
+		eps.Call("push", "wasm") // Fallback to wasm if hardware provider fails
 	} else {
-		// Default to wasm, fallback if needed
-		eps := global.Get("Array").New(1)
-		eps.SetIndex(0, "wasm")
-		options.Set("executionProviders", eps)
+		eps.Call("push", "wasm")
 	}
+	options.Set("executionProviders", eps)
 
 	createPromise := inferenceSession.Call("create", jsU8, options)
 	jsSess, err := Await(createPromise)

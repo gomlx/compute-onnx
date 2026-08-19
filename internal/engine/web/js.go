@@ -52,6 +52,28 @@ func Await(promise js.Value) (js.Value, error) {
 	return res.val, res.err
 }
 
+// HasWebGPU checks if the WebGPU API (navigator.gpu) is present and available in the browser.
+func HasWebGPU() bool {
+	global := js.Global()
+	nav := global.Get("navigator")
+	if nav.IsUndefined() || nav.IsNull() {
+		return false
+	}
+	gpu := nav.Get("gpu")
+	return !gpu.IsUndefined() && !gpu.IsNull()
+}
+
+// HasWebNN checks if the WebNN API (navigator.ml) is present and available in the browser.
+func HasWebNN() bool {
+	global := js.Global()
+	nav := global.Get("navigator")
+	if nav.IsUndefined() || nav.IsNull() {
+		return false
+	}
+	ml := nav.Get("ml")
+	return !ml.IsUndefined() && !ml.IsNull()
+}
+
 // EnsureORTLoaded checks if window.ort is defined. If not, it dynamically loads ort.min.js via script tag or returns error.
 func EnsureORTLoaded() error {
 	global := js.Global()

@@ -28,6 +28,9 @@ func IsSupportedPlatform() bool {
 func parseConfig(config string) (ep string, err error) {
 	config = strings.TrimSpace(config)
 	if config == "" {
+		if web.HasWebGPU() {
+			return "webgpu", nil
+		}
 		return "wasm", nil
 	}
 	if strings.Contains(config, ":") || strings.EqualFold(config, "onnx") || strings.EqualFold(config, "onnxruntime") {
@@ -48,12 +51,18 @@ func parseConfig(config string) (ep string, err error) {
 			ep = "wasm"
 		} else if part == "webgl" {
 			ep = "webgl"
+		} else if part == "webnn" {
+			ep = "webnn"
 		} else {
-			return "", errors.Errorf("unknown web backend option: %q", part)
+			return "", errors.Errorf("unknown web backend option: %q (expected \"webgpu\", \"wasm\", \"webgl\", \"webnn\", or \"cpu\"/\"gpu\")", part)
 		}
 	}
 	if ep == "" {
-		ep = "wasm"
+		if web.HasWebGPU() {
+			ep = "webgpu"
+		} else {
+			ep = "wasm"
+		}
 	}
 	return ep, nil
 }
@@ -63,6 +72,10 @@ func New(config string) (compute.Backend, error) {
 	ep, err := parseConfig(config)
 	if err != nil {
 		return nil, err
+	}
+
+	if ep == "webnn" && !web.HasWebNN() {
+		return nil, errors.New("WebNN is not available in the current browser environment (navigator.ml is undefined); WebNN is experimental in most browsers and typically requires enabling a browser flag such as chrome://flags/#web-machine-learning-neural-network)")
 	}
 
 	if err := web.EnsureORTLoaded(); err != nil {
