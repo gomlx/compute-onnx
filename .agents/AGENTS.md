@@ -6,61 +6,99 @@
 
 ### Relationship to `gomlx/compute` and `gomlx/gomlx`
 
-- **[`github.com/gomlx/gomlx`](https://github.com/gomlx/gomlx)**: The high-level Machine Learning framework for Go (tensors, layers, automatic differentiation, optimizers, model training loops). GoMLX delegates lower-level tensor graph compilation and execution to a `compute.Backend`.
-- **[`github.com/gomlx/compute`](https://github.com/gomlx/compute)**: The foundational execution and backend abstraction interface (`compute.Backend`, `compute.Builder`, `compute.Function`, `compute.Executable`, `compute.Buffer`). It defines the unified IR (Intermediate Representation) graph and operator set that any hardware/framework execution engine must implement.
-- **`github.com/gomlx/compute-onnx` (This Repository)**: Implements `compute.Backend` by translating `compute` computation graphs into ONNX Model Protocol Buffers (`onnx.ModelProto`) at runtime and executing them using ONNX Runtime via CGO bindings.
-
----
-
-## Implementation Architecture & Execution Flow
-
-1. **Graph Construction (`Builder` & `Function`)**:
-   - As GoMLX builds a model or training step, it calls methods on `compute.Function` (e.g. `Add`, `MatMul`, `ConvGeneral`, `ReduceWindow`).
-   - `compute-onnx` records these operations as a directed acyclic graph of `*Node` structures, mapping GoMLX computation nodes to corresponding ONNX operator definitions and attributes.
-
-2. **Compilation (`compile.go`)**:
-   - Upon `Builder.Compile()`, `compile.go` converts the GoMLX AST into an `onnx.ModelProto` (ONNX IR version 9, opset 21).
-   - The serialized ONNX protobuf bytes are passed directly to ONNX Runtime via `ort.NewDynamicAdvancedSessionWithONNXData` to create an `ort.DynamicAdvancedSession`.
-
-3. **Execution (`executable.go` & `buffer.go`)**:
-   - **CPU Path**: Manages CPU tensor memory using `internal/pool` to re-use backing byte slices for inputs and outputs without allocation overhead.
-   - **CUDA/GPU Path**: Uses ONNX Runtime `IoBinding` to keep tensors directly in GPU memory between sequential graph executions without copying data back to host CPU memory. It dynamically loads `libcudart.so` for zero-copy device transfers and manages a concurrent execution context pool (`cudaExecPool`).
+- **[`github.com/gomlx/gomlx`](https://github.com/gomlx/gomlx)**: High-level ML framework in Go (tensors, layers, automatic differentiation, optimizers, model training loops). GoMLX delegates lower-level graph compilation and execution to a `compute.Backend`.
+- **[`github.com/gomlx/compute`](https://github.com/gomlx/compute)**: The foundational execution and backend abstraction interface (`compute.Backend`, `compute.Builder`, `compute.Function`, `compute.Executable`, `compute.Buffer`). It defines the unified IR graph and operator set that execution backends implement.
+- **`github.com/gomlx/compute-onnx` (This Repository)**: Implements `compute.Backend` by translating GoMLX computation graphs into ONNX Model Protocol Buffers (`onnx.ModelProto`) at runtime and executing them using ONNX Runtime.
 
 ---
 
 ## Package Directory Structure
 
-### Public & Support Packages
-
-- **`github.com/gomlx/compute-onnx` (Root)**:
-  Contains the core `compute.Backend` implementation:
-  - `backend.go`: Backend registration, device enumeration, and ONNX Runtime library initialization.
-  - `builder.go` / `function.go`: Graph construction nodes and `compute.Builder` / `compute.Function` implementations.
-  - `compile.go`: Translates GoMLX AST graph nodes into ONNX `ModelProto` protocol buffer definitions.
-  - `executable.go`: Prepares input/output bindings and manages CPU pooling and CUDA `IoBinding` execution.
-  - `buffer.go`: `compute.Buffer` implementation wrapping CPU host memory or CUDA device memory.
-  - `ops_*.go`: Individual operator implementations mapping GoMLX ops (`ConvGeneral`, `DotGeneral`, `ReduceWindow`, `SelectAndScatterMax`, `Gather`, `Scatter`, etc.) to ONNX operators.
-  - `gpu_detect_*.go`: Platform-specific GPU availability and CUDA library detection.
-
-- **`cmd/onnxruntime_installer`**:
-  CLI utility tool for downloading, extracting, and installing official pre-built ONNX Runtime shared libraries (`libonnxruntime.so`) and headers for CPU or CUDA execution environments.
-
-- **`support/onnxruntime`**:
-  Helper package providing convenient backend initialization utilities (e.g., `onnxruntime.New()`) for applications consuming the ONNX Runtime backend.
+```text
+github.com/gomlx/compute-onnx/
+├── backend.go              # Public compute.Backend implementation facade & platform registration
+├── save.go                 # Public SaveModel / LoadModel export and import helpers
+├── doc.go                  # Package-level documentation
+│
+├── internal/
+│   ├── graph/              # Pure Go AST graph construction & ONNX protobuf compilation
+│   │   ├── node.go         # Node IR definitions
+│   │   ├── builder.go      # compute.Builder implementation
+│   │   ├── function.go     # compute.Function implementation
+│   │   ├── compile.go      # AST -> onnx.ModelProto translator and shape inference
+│   │   ├── save.go         # Protobuf serialization, tensor renaming, and shape parsing
+│   │   ├── schedulingbarrier.go # Scheduling barrier implementation (no-op dependency injection)
+│   │   ├── ops.go          # Operator registry & generic binary/unary/comparison helpers
+│   │   └── ops_*.go        # GoMLX -> ONNX operator lowerings (DotGeneral, ConvGeneral, Scatter, etc.)
+│   │
+│   ├── engine/             # Execution engines (Runtime compilation, session management, buffers)
+│   │   ├── native/         # Native desktop/server execution engine (CGO + ONNX Runtime C API)
+│   │   │   ├── session.go  # DynamicAdvancedSession initialization, options, logging, and error wrapping
+│   │   │   ├── executable.go # Native compute.Executable implementation (CPU & CUDA execution paths)
+│   │   │   └── buffer.go   # compute.Buffer implementation (CPU host tensors & GPU OrtValue wrappers)
+│   │   └── web/            # [Planned] ORT Web execution engine (WASM / JS via syscall/js)
+│   │
+│   ├── device/             # Platform & hardware detection
+│   │   ├── cuda/           # CUDA Toolkit, cuDNN, and NVIDIA GPU auto-detection
+│   │   │   ├── detect_linux.go   # Linux /dev/nvidia*, nvidia-smi, ldconfig, and search paths
+│   │   │   ├── detect_other.go   # Non-Linux stubs
+│   │   │   └── detect_linux_test.go
+│   │   └── web/            # [Planned] WebGPU / WebGL browser environment detection
+│   │
+│   ├── ort/                # Low-level CGO wrapper for ONNX Runtime C API (onnxruntime_c_api.h)
+│   ├── pool/               # Memory arena & slice pooling for CPU tensor re-use
+│   └── cmd/                # Maintenance tooling
+│       ├── update_c_ort/   # Code generator updating ONNX Runtime C headers
+│       └── update_protos/  # Code generator fetching official ONNX .proto definitions
+│
+├── support/
+│   ├── onnxruntime/        # Prebuilt libonnxruntime downloader & installer helper
+│   └── protos/             # Auto-generated Go Protocol Buffer bindings for ONNX (onnx-ml.pb.go)
+│
+└── cmd/
+    ├── onnx_printer/       # Diagnostic CLI tool for printing ONNX model graph structure
+    └── onnxruntime_installer/ # CLI installer for downloading official ORT binaries
+```
 
 ---
 
-### Internal Packages (`internal/`)
+## Architectural Separation & Execution Lifecycle
 
-- **`internal/ort`**:
-  Low-level CGO wrapper for the ONNX Runtime C API (`onnxruntime_c_api.h`). Exposes `DynamicAdvancedSession`, `IoBinding`, `MemoryInfo`, `Value`, and CUDA dynamic memory copy procedures (`cuda_copy.go`).
+### 1. Graph Construction & Compilation (`internal/graph`)
+- **Pure Go**: The `internal/graph` package has **no CGO dependencies**. It builds the DAG of `*Node` operations and translates them directly into an `onnx.ModelProto` (IR version 9, opset 21).
+- **Decoupled Compiler**: `graph.Builder` accepts a `CompilerFn` callback. The graph package does not know whether the serialized protobuf will be executed natively via CGO (`internal/engine/native`) or inside a browser via WebAssembly (`internal/engine/web`).
+- **Graph Optimization**: Constant folding, shape propagation, and sub-graph fusing (e.g. `ConvGeneral`, `DotGeneral`, `SelectAndScatterMax`) happen during the AST lowering phase before protobuf marshaling.
 
-- **`internal/pool`**:
-  Memory arena and slice pooling utilities used by the CPU execution path to eliminate heap allocations for intermediate computation buffers during repeated training steps.
+### 2. Native CGO Execution Engine (`internal/engine/native`)
+- **Session Management (`session.go`)**: Manages `ort.DynamicAdvancedSession` instances. Configures execution providers (`CUDAExecutionProvider` with default stream copying, thread pool settings, log severities).
+- **Execution Paths (`executable.go`)**:
+  - **CPU Path**: Uses pre-allocated input/output value slices and thread-safe recycling (`reusableWrappers`) to avoid allocations across execution steps.
+  - **CUDA Path**: Uses `IoBinding` to bind device pointers directly to graph inputs and outputs, bypassing host memory transfers.
 
-- **`support/protos`**:
-  Auto-generated Go Protocol Buffer bindings for ONNX specifications (`onnx-ml.pb.go`), compiled from official `.proto` definitions.
+### 3. Device & Hardware Detection (`internal/device/cuda`)
+- Dynamically checks `/dev/nvidia*`, `nvidia-smi`, `ldconfig -p`, and search paths (`LD_LIBRARY_PATH`, `CUDA_PATH`, `CONDA_PREFIX`, standard `/usr/local/cuda-*` targets) for `libcudart.so` and `libcudnn.so`.
+- Isolates platform-specific build tags (`//go:build linux`, `//go:build !linux`) so that the root package and higher-level code remain clean and portable.
 
-- **Internal Tools (`internal/cmd/`)**:
-  - **`internal/cmd/update_c_ort`**: Code generation / maintenance script that downloads and updates C header files (`onnxruntime_c_api.h`) from upstream ONNX Runtime releases.
-  - **`internal/cmd/update_protos`**: Code generation tool that fetches official ONNX `.proto` files and runs `protoc` to re-generate Go structs in `support/protos`.
+---
+
+## Nuanced Performance Details & Transfer Costs
+
+### 1. GPU (CUDA) Zero-Copy Execution vs Host PCIe Transfers
+- **In-Memory GPU Retention**: When executing on CUDA, `Executable.executeCUDA` produces `native.Buffer` objects backed by `GpuTensorWrapper` containing GPU-resident `OrtValue` handles.
+- **Zero-Copy Pipeline**: If the output of one computation graph is passed as input to the next graph on GPU, `IoBinding.BindInput` binds the existing device memory pointer directly without any Host-to-Device (H2D) or Device-to-Host (D2H) PCIe memory copy.
+- **Transfer Cost Nuance**:
+  - Calling `buffer.Data()` on a GPU buffer returns an error because direct pointer access across PCIe without explicit staging is disallowed.
+  - Calling `buffer.ToFlatData(slice)` performs an explicit synchronous `cudaMemcpy` (D2H) via `ort.CopyGPUToHost`. This incurs PCIe bandwidth latency and pipeline synchronization stalls. Keep data on-device as long as possible during training/inference loops.
+
+### 2. CPU Slice Pooling & Memory Recycling
+- **Buffer Reuse**: On the CPU path, `native.Buffer` instances are backed by host memory. When a buffer is finalized via `buffer.Finalize()`, its underlying `OrtTensorWrapper` is returned to the executable's `reusableWrappers` pool.
+- **Zero Allocation Loops**: Subsequent `Execute()` calls on static-shaped graphs reuse pooled output wrappers directly, resulting in zero heap allocations per step.
+- **Dynamic Shapes Exception**: If graph outputs have dynamic dimensions (e.g. batch size `shapes.DynamicDim`), output shapes cannot be statically predicted before execution. ORT dynamically allocates the output tensor during `session.Run()`, which is then wrapped in a new `Buffer` and destroyed upon finalization rather than pooled.
+
+### 3. Precision Conversions (`Float16` & `BFloat16`)
+- **CPU Path**: ONNX Runtime C API does not have direct native Go primitive types for 16-bit floats. On CPU, `float16` and `bfloat16` tensors are widened to `float32` during tensor construction (`float16ToFloat32` / `bfloat16ToFloat32`) and converted back on extraction.
+- **GPU Path**: `ort.CopyHostToGPU` and `ort.CopyGPUToHost` convert and copy 16-bit floats through float32 staging buffers when interfacing with Go host slices, but internal GPU kernel computation runs at full device float16 performance.
+
+### 4. Concurrency & Thread Locking
+- **OS Thread Locking**: `session.Run()` calls `runtime.LockOSThread()` / `UnlockOSThread()` to prevent the Go runtime scheduler from migrating goroutines between OS threads during low-level CGO runtime execution.
+- **Wrapper Recycling Mutex**: Executable wrapper recycling and buffer finalization are guarded by `mu sync.Mutex`, allowing safe concurrent finalization from Go garbage collection finalizers.

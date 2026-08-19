@@ -1,6 +1,6 @@
 // Copyright 2023-2026 The GoMLX Authors. SPDX-License-Identifier: Apache-2.0
 
-package onnxbackend
+package graph
 
 import (
 	"fmt"
@@ -193,4 +193,29 @@ func (f *Function) Identity(x compute.Value) (compute.Value, error) {
 		shape:  xNode.shape,
 	}
 	return f.addNode(node), nil
+}
+
+// AddCustomNode adds a custom node to the function graph (useful for testing or custom ops).
+func (f *Function) AddCustomNode(opType string, inputs []*Node, shape shapes.Shape) *Node {
+	node := &Node{
+		opType: opType,
+		inputs: inputs,
+		shape:  shape,
+	}
+	return f.addNode(node)
+}
+
+// Nodes returns the recorded nodes of the function.
+func (f *Function) Nodes() []*Node {
+	return f.nodes
+}
+
+// Params returns the parameters of the function.
+func (f *Function) Params() []*Node {
+	return f.params
+}
+
+// Returns returns the return nodes of the function.
+func (f *Function) Returns() []*Node {
+	return f.returns
 }

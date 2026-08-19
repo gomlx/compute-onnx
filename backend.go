@@ -4,7 +4,6 @@ package onnxbackend
 
 import (
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,9 +11,14 @@ import (
 	"sync"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/device/cuda"
+	"github.com/gomlx/compute-onnx/internal/engine/native"
+	"github.com/gomlx/compute-onnx/internal/graph"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"github.com/gomlx/compute-onnx/support/onnxruntime"
+	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
+	"github.com/gomlx/compute/dtypes/gotype"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
@@ -23,37 +27,29 @@ const (
 	BackendName = "onnxruntime"
 )
 
-var (
-	initMutex         sync.Mutex
-	isOrtInitialized  bool
-	supportedOps      = make(map[compute.OpType]bool)
-	supportedOpsMutex sync.RWMutex
+// Type aliases for internal types exposed for backwards compatibility / introspection.
+type Executable = native.Executable
+type Buffer = native.Buffer
+type Builder = graph.Builder
+type Function = graph.Function
+type Node = graph.Node
 
-	autoInstall = true
+const SaveOnFailureEnv = native.SaveOnFailureEnv
+
+// MakeScalar constructs a 0D scalar constant tensor in the given function.
+func MakeScalar[T gotype.NumericNotComplex](f *graph.Function, value T, dtype dtypes.DType) (compute.Value, error) {
+	return graph.MakeScalar(f, value, dtype)
+}
+
+var (
+	initMutex        sync.Mutex
+	isOrtInitialized bool
+	autoInstall      = true
 )
 
 // NoAutoInstallEnv is the environment variable that, when set, disables
 // automatic downloading and installation of prebuilt ONNX Runtime shared libraries.
 const NoAutoInstallEnv = "GOMLX_NO_AUTO_INSTALL"
-
-// SaveOnFailureEnv is the environment variable that, when set to a file path,
-// instructs the ONNX Runtime backend to save the serialized ONNX model protobuf to
-// that path if graph compilation / session creation fails.
-const SaveOnFailureEnv = "GOMLX_ONNX_SAVE_ON_FAILURE"
-
-func registerOp(op compute.OpType) {
-	supportedOpsMutex.Lock()
-	defer supportedOpsMutex.Unlock()
-	supportedOps[op] = true
-}
-
-func getSupportedOps() map[compute.OpType]bool {
-	supportedOpsMutex.RLock()
-	defer supportedOpsMutex.RUnlock()
-	ops := make(map[compute.OpType]bool, len(supportedOps))
-	maps.Copy(ops, supportedOps)
-	return ops
-}
 
 // EnableAutoInstall controls whether the backend automatically downloads and installs
 // prebuilt ONNX Runtime shared libraries if none are found.
@@ -79,7 +75,7 @@ func isLibraryPath(part string) bool {
 	return false
 }
 
-func initializeORT(cuda bool, customLibPath string) error {
+func initializeORT(cudaEnabled bool, customLibPath string) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if isOrtInitialized {
@@ -97,7 +93,7 @@ func initializeORT(cuda bool, customLibPath string) error {
 					targetPath := filepath.Join(installDir, libFilename)
 					if _, err := os.Stat(targetPath); err == nil {
 						useInstalled := true
-						if cuda {
+						if cudaEnabled {
 							cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
 							if _, err := os.Stat(cudaLibPath); err != nil {
 								useInstalled = false
@@ -121,7 +117,7 @@ func initializeORT(cuda bool, customLibPath string) error {
 			return errors.Errorf("ONNX Runtime library not found (ONNXRUNTIME_SHARED_LIBRARY_PATH is not set) and auto-installation is disabled via %s or EnableAutoInstall(false)", NoAutoInstallEnv)
 		}
 		var err error
-		path, err = onnxruntime.Install(onnxruntime.DefaultVersion, cuda, "", "", false)
+		path, err = onnxruntime.Install(onnxruntime.DefaultVersion, cudaEnabled, "", "", false)
 		if err != nil {
 			return errors.Wrap(err, "failed to automatically install ONNX Runtime library")
 		}
@@ -136,7 +132,7 @@ func initializeORT(cuda bool, customLibPath string) error {
 	return nil
 }
 
-// Backend represents a ONNX Runtime backed [compute.Backend].
+// Backend represents an ONNX Runtime backed [compute.Backend].
 type Backend struct {
 	config         string
 	cuda           bool
@@ -184,18 +180,6 @@ func init() {
 	}
 }
 
-func isCUDALibraryAvailable(dir string) bool {
-	cudaLibPath := filepath.Join(dir, "libonnxruntime_providers_cuda.so")
-	if _, err := os.Stat(cudaLibPath); err == nil {
-		return true
-	}
-	cudaLibPathWin := filepath.Join(dir, "onnxruntime_providers_cuda.dll")
-	if _, err := os.Stat(cudaLibPathWin); err == nil {
-		return true
-	}
-	return false
-}
-
 // ParseGOMLXBackendEnv parses a GOMLX_BACKEND environment variable string (e.g. "onnx:cpu", "onnx", "onnxruntime:cuda,log=2").
 // It verifies that the backend selection is "onnx" or "onnxruntime", strips the backend name prefix, and returns the configuration options string.
 // For example:
@@ -219,8 +203,8 @@ func ParseGOMLXBackendEnv(envVal string) (string, error) {
 	return "", nil
 }
 
-func parseConfig(config string) (cuda bool, logSeverity int, customLibPath string, err error) {
-	cuda = false
+func parseConfig(config string) (cudaEnabled bool, logSeverity int, customLibPath string, err error) {
+	cudaEnabled = false
 	hasProvider := false
 	logSeverity = -1 // not set
 
@@ -245,9 +229,9 @@ func parseConfig(config string) (cuda bool, logSeverity int, customLibPath strin
 	config = strings.TrimSpace(config)
 	if config == "" {
 		if envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH"); envPath != "" {
-			return HasNvidiaGPU() && isCUDALibraryAvailable(filepath.Dir(envPath)), -1, "", nil
+			return cuda.HasNvidiaGPU() && cuda.IsCUDALibraryAvailable(filepath.Dir(envPath)), -1, "", nil
 		}
-		return HasNvidiaGPU(), -1, "", nil
+		return cuda.HasNvidiaGPU(), -1, "", nil
 	}
 
 	parts := strings.SplitSeq(config, ",")
@@ -278,10 +262,10 @@ func parseConfig(config string) (cuda bool, logSeverity int, customLibPath strin
 		} else {
 			partLower := strings.ToLower(part)
 			if partLower == "cuda" || partLower == "gpu" {
-				cuda = true
+				cudaEnabled = true
 				hasProvider = true
 			} else if partLower == "cpu" {
-				cuda = false
+				cudaEnabled = false
 				hasProvider = true
 			} else if isLibraryPath(part) {
 				customLibPath = part
@@ -293,40 +277,41 @@ func parseConfig(config string) (cuda bool, logSeverity int, customLibPath strin
 
 	if !hasProvider {
 		if customLibPath != "" {
-			cuda = HasNvidiaGPU() && isCUDALibraryAvailable(filepath.Dir(customLibPath))
+			cudaEnabled = cuda.HasNvidiaGPU() && cuda.IsCUDALibraryAvailable(filepath.Dir(customLibPath))
 		} else if envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH"); envPath != "" {
-			cuda = HasNvidiaGPU() && isCUDALibraryAvailable(filepath.Dir(envPath))
+			cudaEnabled = cuda.HasNvidiaGPU() && cuda.IsCUDALibraryAvailable(filepath.Dir(envPath))
 		} else {
-			cuda = HasNvidiaGPU()
+			cudaEnabled = cuda.HasNvidiaGPU()
 		}
 	}
-	return cuda, logSeverity, customLibPath, nil
+	return cudaEnabled, logSeverity, customLibPath, nil
 }
 
+// New creates a new ONNX Runtime backend instance with the given configuration string.
 func New(config string) (compute.Backend, error) {
 	if !IsSupportedPlatform() {
 		return nil, errors.Errorf("onnxruntime backend is not supported on platform %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
-	cuda, logSeverity, customLibPath, err := parseConfig(config)
+	cudaEnabled, logSeverity, customLibPath, err := parseConfig(config)
 	if err != nil {
 		return nil, err
 	}
 
-	if cuda {
+	if cudaEnabled {
 		// Verify CUDA and cuDNN are installed on the system
-		if err := checkCUDAAndCUDNN(); err != nil {
+		if err := cuda.CheckCUDAAndCUDNN(); err != nil {
 			return nil, err
 		}
 	}
 
-	err = initializeORT(cuda, customLibPath)
+	err = initializeORT(cudaEnabled, customLibPath)
 	if err != nil {
 		return nil, err
 	}
 	return &Backend{
 		config:      config,
-		cuda:        cuda,
+		cuda:        cudaEnabled,
 		logSeverity: logSeverity,
 	}, nil
 }
@@ -359,7 +344,7 @@ func (b *Backend) DeviceDescription(deviceNum compute.DeviceNum) string {
 
 func (b *Backend) Capabilities() compute.Capabilities {
 	caps := compute.Capabilities{
-		Operations:                  getSupportedOps(),
+		Operations:                  graph.GetSupportedOps(),
 		DTypes:                      make(map[dtypes.DType]bool),
 		PreferConstantsForVariables: true,
 		DynamicAxes:                 true,
@@ -381,25 +366,29 @@ func (b *Backend) Capabilities() compute.Capabilities {
 }
 
 func (b *Backend) Builder(name string) compute.Builder {
-	return NewBuilder(name, b)
+	return graph.NewBuilder(name, func(gb *graph.Builder) (compute.Executable, error) {
+		compiled, err := graph.CompileToProto(gb)
+		if err != nil {
+			return nil, err
+		}
+		session, err := native.CreateSession(compiled.ModelBytes, compiled.InputNames, compiled.OutputNames, b.cuda, b.logSeverity)
+		if err != nil {
+			return nil, err
+		}
+		var savedModelProto *onnx.ModelProto
+		if b.keepModelProto {
+			savedModelProto = compiled.Model
+		}
+		return native.NewExecutable(b, session, compiled.InputNames, compiled.InputShapes, compiled.OutputNames, compiled.OutputShapes, savedModelProto, b.cuda), nil
+	})
 }
 
 func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shape shapes.Shape) (compute.Buffer, error) {
-	return b.bufferFromFlatDataCPU(deviceNum, flat, shape)
-}
-
-func (b *Backend) bufferFromFlatDataCPU(deviceNum compute.DeviceNum, flat any, shape shapes.Shape) (*Buffer, error) {
-	wrapper, err := newOrtTensorWrapper(shape, flat)
+	wrapper, err := native.NewOrtTensorWrapper(shape, flat)
 	if err != nil {
 		return nil, err
 	}
-	return &Buffer{
-		backend:  b,
-		wrapper:  wrapper,
-		shape:    shape,
-		device:   deviceNum,
-		isShared: true,
-	}, nil
+	return native.NewBuffer(b, wrapper, shape, deviceNum, true, false, nil), nil
 }
 
 func (b *Backend) HasSharedBuffers() bool {
@@ -407,99 +396,12 @@ func (b *Backend) HasSharedBuffers() bool {
 }
 
 func (b *Backend) NewSharedBuffer(deviceNum compute.DeviceNum, shape shapes.Shape) (compute.Buffer, any, error) {
-	ortShape := ort.NewShape(toInt64s(shape.Dimensions)...)
-	var wrapper ortTensorWrapper
-	var flat any
-
-	switch shape.DType {
-	case dtypes.Float32:
-		t, err := ort.NewEmptyTensor[float32](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[float32]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Float64:
-		t, err := ort.NewEmptyTensor[float64](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[float64]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Int32:
-		t, err := ort.NewEmptyTensor[int32](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[int32]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Int64:
-		t, err := ort.NewEmptyTensor[int64](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[int64]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Bool:
-		t, err := ort.NewEmptyTensor[bool](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[bool]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Int8:
-		t, err := ort.NewEmptyTensor[int8](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[int8]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Uint8:
-		t, err := ort.NewEmptyTensor[uint8](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[uint8]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Int16:
-		t, err := ort.NewEmptyTensor[int16](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[int16]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Uint16:
-		t, err := ort.NewEmptyTensor[uint16](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[uint16]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Uint32:
-		t, err := ort.NewEmptyTensor[uint32](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[uint32]{tensor: t}
-		flat = t.GetData()
-	case dtypes.Uint64:
-		t, err := ort.NewEmptyTensor[uint64](ortShape)
-		if err != nil {
-			return nil, nil, err
-		}
-		wrapper = &typedTensor[uint64]{tensor: t}
-		flat = t.GetData()
-	default:
-		return nil, nil, errors.Errorf("shared buffers not implemented for dtype %s", shape.DType)
+	wrapper, err := native.NewEmptyOrtTensorWrapper(shape)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	buf := &Buffer{
-		backend:  b,
-		wrapper:  wrapper,
-		shape:    shape,
-		device:   deviceNum,
-		isShared: true,
-	}
+	flat := wrapper.GetData()
+	buf := native.NewBuffer(b, wrapper, shape, deviceNum, true, false, nil)
 	return buf, flat, nil
 }
 

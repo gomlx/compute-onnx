@@ -1,12 +1,35 @@
 // Copyright 2023-2026 The GoMLX Authors. SPDX-License-Identifier: Apache-2.0
 
-package onnxbackend
+package graph
 
 import (
+	"maps"
+	"sync"
+
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/shapeinference"
 	"github.com/pkg/errors"
 )
+
+var (
+	supportedOps      = make(map[compute.OpType]bool)
+	supportedOpsMutex sync.RWMutex
+)
+
+func registerOp(op compute.OpType) {
+	supportedOpsMutex.Lock()
+	defer supportedOpsMutex.Unlock()
+	supportedOps[op] = true
+}
+
+// GetSupportedOps returns a copy of all supported compute.OpType operations.
+func GetSupportedOps() map[compute.OpType]bool {
+	supportedOpsMutex.RLock()
+	defer supportedOpsMutex.RUnlock()
+	ops := make(map[compute.OpType]bool, len(supportedOps))
+	maps.Copy(ops, supportedOps)
+	return ops
+}
 
 func init() {
 	// Binary

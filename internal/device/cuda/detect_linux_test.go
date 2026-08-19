@@ -2,7 +2,7 @@
 
 //go:build linux
 
-package onnxbackend
+package cuda
 
 import (
 	"os"
@@ -23,7 +23,7 @@ func TestGetCUDALibrarySearchPaths(t *testing.T) {
 	t.Setenv("CONDA_PREFIX", customConda)
 	t.Setenv("LD_LIBRARY_PATH", filepath.Join(tmpDir, "ld_lib"))
 
-	paths, _, _ := getCUDALibrarySearchPaths()
+	paths, _, _ := GetCUDALibrarySearchPaths()
 
 	expectedSubpaths := []string{
 		filepath.Join(tmpDir, "ld_lib"),
@@ -67,7 +67,7 @@ func TestCheckCUDAAndCUDNNMock(t *testing.T) {
 	t.Setenv("CUDA_HOME", filepath.Join(tmpDir, "cuda"))
 	t.Setenv("CUDNN_HOME", filepath.Join(tmpDir, "cudnn"))
 
-	if err := checkCUDAAndCUDNN(); err != nil {
-		t.Errorf("checkCUDAAndCUDNN failed with custom environment: %v", err)
+	if err := CheckCUDAAndCUDNN(); err != nil {
+		t.Errorf("CheckCUDAAndCUDNN failed with custom environment: %v", err)
 	}
 }
