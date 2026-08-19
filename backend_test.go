@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/device/cuda"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 	"github.com/gomlx/compute/support/backendtest"
@@ -177,12 +178,7 @@ func TestSaveOnFailureEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create parameter: %+v", err)
 	}
-	invalidNode := &Node{
-		opType: "InvalidOpNameThatDoesNotExistInONNX",
-		inputs: []*Node{param.(*Node)},
-		shape:  shapes.Make(dtypes.Float32, 2, 2),
-	}
-	fn.addNode(invalidNode)
+	invalidNode := fn.AddCustomNode("InvalidOpNameThatDoesNotExistInONNX", []*Node{param.(*Node)}, shapes.Make(dtypes.Float32, 2, 2))
 	fn.Return([]compute.Value{invalidNode}, nil)
 
 	_, compileErr := builder.Compile()
@@ -221,7 +217,7 @@ func TestParseConfig(t *testing.T) {
 		{config: "onnx:cuda,log=2", wantCuda: true, wantLog: 1, wantCustomLibPath: ""},
 		{config: "openxla:cuda", wantErr: true},
 		{config: cpuLibPath, wantCuda: false, wantLog: -1, wantCustomLibPath: cpuLibPath},
-		{config: cudaLibPath, wantCuda: HasNvidiaGPU(), wantLog: -1, wantCustomLibPath: cudaLibPath},
+		{config: cudaLibPath, wantCuda: cuda.HasNvidiaGPU(), wantLog: -1, wantCustomLibPath: cudaLibPath},
 		{config: "cuda," + cpuLibPath, wantCuda: true, wantLog: -1, wantCustomLibPath: cpuLibPath},
 		{config: "invalid_option_xyz", wantErr: true},
 	}

@@ -1,6 +1,6 @@
 // Copyright 2023-2026 The GoMLX Authors. SPDX-License-Identifier: Apache-2.0
 
-package onnxbackend
+package native
 
 import (
 	"runtime"
@@ -17,18 +17,20 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// Executable implements [compute.Executable] for ONNX Runtime native execution (CPU & CUDA).
 type Executable struct {
-	backend          *Backend
+	backend          compute.Backend
 	session          *ort.DynamicAdvancedSession
 	inputNames       []string
 	inputShapes      []shapes.Shape
 	outputNames      []string
 	outputShapes     []shapes.Shape
-	reusableWrappers []ortTensorWrapper
+	reusableWrappers []OrtTensorWrapper
+	cuda             bool
 
 	// Pre-allocated slices reused across Execute calls (CPU path only, single-threaded).
 	cachedOrtInputs  []ort.Value
-	cachedOutWraps   []ortTensorWrapper
+	cachedOutWraps   []OrtTensorWrapper
 	cachedOrtOutputs []ort.Value
 
 	// Mutex to protect reusableWrappers for concurrent buffer finalization.
@@ -39,10 +41,11 @@ type Executable struct {
 
 var _ compute.Executable = (*Executable)(nil)
 
-func newExecutable(backend *Backend, session *ort.DynamicAdvancedSession,
+// NewExecutable creates a new Native Executable.
+func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 	inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape,
-	modelProto *onnx.ModelProto) *Executable {
+	modelProto *onnx.ModelProto, cuda bool) *Executable {
 
 	nInputs := len(inputNames)
 	nOutputs := len(outputShapes)
@@ -55,15 +58,21 @@ func newExecutable(backend *Backend, session *ort.DynamicAdvancedSession,
 		outputNames:      outputNames,
 		outputShapes:     outputShapes,
 		cachedOrtInputs:  make([]ort.Value, nInputs),
-		cachedOutWraps:   make([]ortTensorWrapper, nOutputs),
+		cachedOutWraps:   make([]OrtTensorWrapper, nOutputs),
 		cachedOrtOutputs: make([]ort.Value, nOutputs),
 		modelProto:       modelProto,
+		cuda:             cuda,
 	}
 	runtime.SetFinalizer(e, (*Executable).Finalize)
 	return e
 }
 
-// ModelProto returns the ONNX ModelProto struct if Backend.KeepModelProto was enabled during compilation, or nil otherwise.
+// Backend returns the parent compute.Backend.
+func (e *Executable) Backend() compute.Backend {
+	return e.backend
+}
+
+// ModelProto returns the ONNX ModelProto struct if retain was enabled during compilation, or nil otherwise.
 func (e *Executable) ModelProto() *onnx.ModelProto {
 	return e.modelProto
 }
@@ -91,7 +100,7 @@ func (e *Executable) Outputs() (outputShapes []shapes.Shape) {
 	return e.outputShapes
 }
 
-func wrapperMatchesShape(w ortTensorWrapper, sh shapes.Shape) bool {
+func wrapperMatchesShape(w OrtTensorWrapper, sh shapes.Shape) bool {
 	if w.GetDType() != sh.DType {
 		return false
 	}
@@ -99,50 +108,40 @@ func wrapperMatchesShape(w ortTensorWrapper, sh shapes.Shape) bool {
 	if len(rwShape) != len(sh.Dimensions) {
 		return false
 	}
-	for k, dim := range rwShape {
-		if dim != int64(sh.Dimensions[k]) {
+	for i, d := range rwShape {
+		if int(d) != sh.Dimensions[i] {
 			return false
 		}
 	}
 	return true
 }
 
-func (e *Executable) matchesAnyOutput(dtype dtypes.DType, shape ort.Shape) bool {
-	for _, outShape := range e.outputShapes {
-		if outShape.DType == dtype && len(shape) == len(outShape.Dimensions) {
-			match := true
-			for k, dim := range shape {
-				if dim != int64(outShape.Dimensions[k]) {
-					match = false
-					break
-				}
+func (e *Executable) matchesAnyOutput(dtype dtypes.DType, ortShape ort.Shape) bool {
+	for _, sh := range e.outputShapes {
+		if sh.DType != dtype {
+			continue
+		}
+		if len(sh.Dimensions) != len(ortShape) {
+			continue
+		}
+		match := true
+		for i, d := range sh.Dimensions {
+			if d != int(ortShape[i]) {
+				match = false
+				break
 			}
-			if match {
-				return true
-			}
+		}
+		if match {
+			return true
 		}
 	}
 	return false
 }
 
-// recycleWrapper returns a wrapper to the reusable pool if it matches any output shape.
-// If not recyclable or pool is full, the wrapper is destroyed immediately.
-// Thread-safe.
-func (e *Executable) recycleWrapper(w ortTensorWrapper) {
-	if w == nil {
-		return
-	}
-
-	// Don't recycle on CUDA — buffer management is different.
-	if e.backend.cuda {
-		_ = w.Destroy()
-		return
-	}
-
+func (e *Executable) recycleWrapper(w OrtTensorWrapper) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Don't recycle if executable is finalized.
 	if e.session == nil {
 		_ = w.Destroy()
 		return
@@ -171,13 +170,12 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 	}
 
 	defer runtime.KeepAlive(inputs)
-	if e.backend.cuda {
-
+	if e.cuda {
 		// CUDA path: build local ortInputs slice.
 		ortInputs := make([]ort.Value, len(e.inputNames))
-		var dummyWrapper ortTensorWrapper
+		var dummyWrapper OrtTensorWrapper
 		if isDummyInput {
-			wrapper, err := newOrtTensorWrapper(e.inputShapes[0], []int32{0})
+			wrapper, err := NewOrtTensorWrapper(e.inputShapes[0], []int32{0})
 			if err != nil {
 				return nil, err
 			}
@@ -206,9 +204,9 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 	defer e.mu.Unlock()
 
 	// Populate shared cachedOrtInputs.
-	var dummyInputWrapper ortTensorWrapper
+	var dummyInputWrapper OrtTensorWrapper
 	if isDummyInput {
-		wrapper, err := newOrtTensorWrapper(e.inputShapes[0], []int32{0})
+		wrapper, err := NewOrtTensorWrapper(e.inputShapes[0], []int32{0})
 		if err != nil {
 			return nil, err
 		}
@@ -236,7 +234,6 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 	return e.executeCPU(inputs, donate, defaultDevice)
 }
 
-// executeCUDA uses IoBinding to run ONNX Runtime models on GPU.
 func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
 	defer runtime.KeepAlive(inputs)
 	defer runtime.KeepAlive(ortInputs)
@@ -307,14 +304,10 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 		ortShape := ort.NewShape(toInt64s(actualShape.Dimensions)...)
 		outBuffers[i] = &Buffer{
 			backend: e.backend,
-			wrapper: &gpuTensorWrapper{
-				val:   val,
-				shape: ortShape,
-				dtype: actualShape.DType,
-			},
-			shape:  actualShape,
-			device: defaultDevice,
-			isCUDA: true,
+			wrapper: NewGpuTensorWrapper(val, ortShape, actualShape.DType),
+			shape:   actualShape,
+			device:  defaultDevice,
+			isCUDA:  true,
 		}
 	}
 
@@ -331,9 +324,6 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 	return outBuffers, nil
 }
 
-
-
-// executeCPU is the optimized execution path for CPU with pre-allocated outputs and recycling.
 func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
 	outWrappers := e.cachedOutWraps
 	ortOutputs := e.cachedOrtOutputs
@@ -353,17 +343,15 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 
 		if matchedIdx >= 0 {
 			outWrappers[i] = e.reusableWrappers[matchedIdx]
-			// Swap-remove for O(1) deletion.
 			last := len(e.reusableWrappers) - 1
 			e.reusableWrappers[matchedIdx] = e.reusableWrappers[last]
 			e.reusableWrappers[last] = nil
 			e.reusableWrappers = e.reusableWrappers[:last]
 		} else {
-			outWrappers[i] = nil // mark as needing allocation
+			outWrappers[i] = nil
 		}
 	}
 
-	// Allocate any output wrappers that weren't found in pool (outside lock).
 	for i, sh := range e.outputShapes {
 		if sh.IsDynamic() {
 			ortOutputs[i] = nil
@@ -371,7 +359,7 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 		}
 		if outWrappers[i] == nil {
 			var err error
-			outWrappers[i], err = newEmptyOrtTensorWrapper(sh)
+			outWrappers[i], err = NewEmptyOrtTensorWrapper(sh)
 			if err != nil {
 				for _, w := range outWrappers {
 					if w != nil {
@@ -389,13 +377,13 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 		start = time.Now()
 	}
 	if klog.V(2).Enabled() {
-		klog.Infof("Starting session.Run on %s (inputs=%d, outputs=%d)...", e.backend.config, len(e.cachedOrtInputs), len(ortOutputs))
+		klog.Infof("Starting session.Run on CPU (inputs=%d, outputs=%d)...", len(e.cachedOrtInputs), len(ortOutputs))
 	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	err := e.session.Run(e.cachedOrtInputs, ortOutputs)
 	if klog.V(1).Enabled() {
-		klog.Infof("Execution (%s) elapsed time: %s\n", e.backend.config, humanize.Duration(time.Since(start)))
+		klog.Infof("Execution (CPU) elapsed time: %s\n", humanize.Duration(time.Since(start)))
 	}
 	if err != nil {
 		for _, w := range outWrappers {
@@ -406,14 +394,12 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 		return nil, errors.Wrap(err, "onnxruntime execution failed")
 	}
 
-	// Construct output buffers wrapping our C-heap memory zero-copy.
-	// Must allocate fresh slice each call since it escapes to the caller.
 	outBuffers := make([]compute.Buffer, len(e.outputShapes))
 	for i, sh := range e.outputShapes {
 		actualShape := sh
 		if sh.IsDynamic() {
 			var err error
-			outWrappers[i], err = wrapOrtValue(ortOutputs[i], sh)
+			outWrappers[i], err = WrapOrtValue(ortOutputs[i], sh)
 			if err != nil {
 				return nil, err
 			}
@@ -426,8 +412,8 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 		}
 
 		execBackpointer := e
-		if e.backend.cuda {
-			execBackpointer = nil // Don't recycle wrappers on CUDA; destroy them on Finalize
+		if e.cuda {
+			execBackpointer = nil
 		}
 		outBuffers[i] = &Buffer{
 			backend:    e.backend,
@@ -437,13 +423,9 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 			isShared:   true,
 			executable: execBackpointer,
 		}
-		outWrappers[i] = nil // ownership transferred to Buffer
+		outWrappers[i] = nil
 	}
 
-	// Donated input wrappers are destroyed, not recycled. While GoMLX doesn't
-	// access them after Execute(), their data layout may not match what ORT
-	// expects for pre-allocated outputs. Only output wrappers (returned via
-	// Buffer.Finalize) are known-compatible with the pre-allocated output path.
 	for i, inp := range inputs {
 		if i < len(donate) && donate[i] {
 			buf := inp.(*Buffer)

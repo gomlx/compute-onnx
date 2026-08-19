@@ -1,46 +1,39 @@
 // Copyright 2023-2026 The GoMLX Authors. SPDX-License-Identifier: Apache-2.0
 
-package onnxbackend
+package graph
 
 import (
 	"github.com/gomlx/compute"
-	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/notimplemented"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
 
-type Node struct {
-	name        string
-	opType      string
-	domain      string
-	inputs      []*Node
-	outputNames []string
-	shape       shapes.Shape
-	flatValue   any // used if opType == "Constant"
-	attributes  []*onnx.AttributeProto
-}
+// CompilerFn is the function type used by Builder to compile a graph into a compute.Executable.
+type CompilerFn func(b *Builder) (compute.Executable, error)
 
+// Builder implements [compute.Builder] for building ONNX computation graphs.
 type Builder struct {
 	notimplemented.Builder
-	name    string
-	backend *Backend
-	mainFn  *Function
-	funcs   map[string]*Function
+	name      string
+	compileFn CompilerFn
+	mainFn    *Function
+	funcs     map[string]*Function
 }
 
 var _ compute.Builder = (*Builder)(nil)
 
-func NewBuilder(name string, backend *Backend) *Builder {
+// NewBuilder creates a new graph Builder.
+func NewBuilder(name string, compileFn CompilerFn) *Builder {
 	b := &Builder{
 		Builder: notimplemented.Builder{
 			ErrFn: func(op compute.OpType) error {
 				return errors.Wrapf(compute.ErrNotImplemented, "%s (%d) not implemented for ONNX Runtime backend", op, op)
 			},
 		},
-		name:    name,
-		backend: backend,
-		funcs:   make(map[string]*Function),
+		name:      name,
+		compileFn: compileFn,
+		funcs:     make(map[string]*Function),
 	}
 	b.mainFn = NewFunction(compute.MainName, b)
 	b.funcs[compute.MainName] = b.mainFn
@@ -53,6 +46,16 @@ func (b *Builder) Name() string {
 
 func (b *Builder) Main() compute.Function {
 	return b.mainFn
+}
+
+// MainFunction returns the strongly typed main *Function.
+func (b *Builder) MainFunction() *Function {
+	return b.mainFn
+}
+
+// Functions returns all registered functions in the builder.
+func (b *Builder) Functions() map[string]*Function {
+	return b.funcs
 }
 
 func (b *Builder) NewFunction(name string) (compute.Function, error) {
@@ -78,4 +81,11 @@ func (b *Builder) DeviceAssignment(devices ...compute.DeviceNum) error {
 		return errors.Wrap(compute.ErrNotImplemented, "only device 0 is supported by onnxruntime backend")
 	}
 	return nil
+}
+
+func (b *Builder) Compile() (compute.Executable, error) {
+	if b.compileFn == nil {
+		return nil, errors.New("no compiler configured for builder")
+	}
+	return b.compileFn(b)
 }
