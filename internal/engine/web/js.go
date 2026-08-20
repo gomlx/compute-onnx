@@ -75,6 +75,58 @@ func HasWebGPU() bool {
 	return true
 }
 
+// GetWebGPUDevice returns the GPUDevice initialized by ORT Web or creates one if needed.
+func GetWebGPUDevice() (js.Value, error) {
+	global := js.Global()
+	ortVal := global.Get("ort")
+	if !ortVal.IsUndefined() && !ortVal.IsNull() {
+		env := ortVal.Get("env")
+		if !env.IsUndefined() && !env.IsNull() {
+			webgpuEnv := env.Get("webgpu")
+			if !webgpuEnv.IsUndefined() && !webgpuEnv.IsNull() {
+				dev := webgpuEnv.Get("device")
+				if !dev.IsUndefined() && !dev.IsNull() {
+					return dev, nil
+				}
+			}
+		}
+	}
+
+	// If not initialized yet by ORT, request from navigator.gpu
+	nav := global.Get("navigator")
+	if nav.IsUndefined() || nav.IsNull() {
+		return js.Undefined(), errors.New("navigator is not available")
+	}
+	gpu := nav.Get("gpu")
+	if gpu.IsUndefined() || gpu.IsNull() {
+		return js.Undefined(), errors.New("navigator.gpu is not available")
+	}
+	adapterPromise := gpu.Call("requestAdapter")
+	adapter, err := Await(adapterPromise)
+	if err != nil || adapter.IsUndefined() || adapter.IsNull() {
+		return js.Undefined(), errors.Wrap(err, "failed to get WebGPU adapter")
+	}
+	devicePromise := adapter.Call("requestDevice")
+	device, err := Await(devicePromise)
+	if err != nil || device.IsUndefined() || device.IsNull() {
+		return js.Undefined(), errors.Wrap(err, "failed to get WebGPU device")
+	}
+
+	// Register with ort.env.webgpu.device so ORT reuses this same device
+	if !ortVal.IsUndefined() && !ortVal.IsNull() {
+		env := ortVal.Get("env")
+		if !env.IsUndefined() && !env.IsNull() {
+			webgpuEnv := env.Get("webgpu")
+			if webgpuEnv.IsUndefined() || webgpuEnv.IsNull() {
+				webgpuEnv = global.Get("Object").New()
+				env.Set("webgpu", webgpuEnv)
+			}
+			webgpuEnv.Set("device", device)
+		}
+	}
+	return device, nil
+}
+
 // HasWebNN checks if the WebNN API (navigator.ml) is present and available in the browser.
 func HasWebNN() bool {
 	global := js.Global()

@@ -23,6 +23,12 @@ type Executable struct {
 	outputNames  []string
 	outputShapes []shapes.Shape
 	modelProto   *onnx.ModelProto
+
+	// WebGPU optimization fields
+	isWebGPU       bool
+	gpuDevice      js.Value
+	gpuInputBuffers []js.Value
+	gpuInputTensors []js.Value
 }
 
 var _ compute.Executable = (*Executable)(nil)
@@ -33,7 +39,7 @@ func NewExecutable(backend compute.Backend, session *Session,
 	outputNames []string, outputShapes []shapes.Shape,
 	modelProto *onnx.ModelProto) *Executable {
 
-	return &Executable{
+	exec := &Executable{
 		backend:      backend,
 		session:      session,
 		inputNames:   inputNames,
@@ -41,6 +47,73 @@ func NewExecutable(backend compute.Backend, session *Session,
 		outputNames:  outputNames,
 		outputShapes: outputShapes,
 		modelProto:   modelProto,
+	}
+
+	// If running under WebGPU, pre-allocate static input GPU buffers
+	if session != nil && session.ep == "webgpu" {
+		dev, errDev := GetWebGPUDevice()
+		if errDev == nil && !dev.IsUndefined() && !dev.IsNull() {
+			exec.isWebGPU = true
+			exec.gpuDevice = dev
+			exec.initWebGPUStaticBuffers()
+		}
+	}
+
+	return exec
+}
+
+func (e *Executable) initWebGPUStaticBuffers() {
+	global := js.Global()
+	ortVal := global.Get("ort")
+	if ortVal.IsUndefined() || ortVal.IsNull() {
+		return
+	}
+	tensorCtor := ortVal.Get("Tensor")
+	if tensorCtor.IsUndefined() || tensorCtor.IsNull() {
+		return
+	}
+	fromGpuBuffer := tensorCtor.Get("fromGpuBuffer")
+	if fromGpuBuffer.IsUndefined() || fromGpuBuffer.IsNull() {
+		return
+	}
+
+	// 1. Static input buffers
+	e.gpuInputBuffers = make([]js.Value, len(e.inputNames))
+	e.gpuInputTensors = make([]js.Value, len(e.inputNames))
+
+	for i, sh := range e.inputShapes {
+		if sh.IsDynamic() {
+			continue
+		}
+		byteSize := sh.Size() * sh.DType.Size()
+		if byteSize == 0 {
+			continue
+		}
+		// WebGPU buffer sizes must be aligned to 16 bytes for storage buffers
+		alignedSize := (byteSize + 15) &^ 15
+
+		bufDesc := global.Get("Object").New()
+		bufDesc.Set("size", alignedSize)
+		// usage: STORAGE | COPY_DST | COPY_SRC
+		bufDesc.Set("usage", 0x0080|0x0008|0x0004)
+
+		gpuBuf := e.gpuDevice.Call("createBuffer", bufDesc)
+		e.gpuInputBuffers[i] = gpuBuf
+
+		ortType, errType := ORTTypeString(sh.DType)
+		if errType != nil {
+			continue
+		}
+		opts := global.Get("Object").New()
+		opts.Set("dataType", ortType)
+		dimsArray := global.Get("Array").New()
+		for _, d := range sh.Dimensions {
+			dimsArray.Call("push", d)
+		}
+		opts.Set("dims", dimsArray)
+
+		gpuTensor := tensorCtor.Call("fromGpuBuffer", gpuBuf, opts)
+		e.gpuInputTensors[i] = gpuTensor
 	}
 }
 
@@ -64,12 +137,19 @@ func (e *Executable) Outputs() (outputShapes []shapes.Shape) {
 	return e.outputShapes
 }
 
-// Finalize releases the underlying session.
+// Finalize releases the underlying session and GPU buffers.
 func (e *Executable) Finalize() {
 	if e.session != nil {
 		_ = e.session.Destroy()
 		e.session = nil
 	}
+	for _, buf := range e.gpuInputBuffers {
+		if !buf.IsUndefined() && !buf.IsNull() {
+			buf.Call("destroy")
+		}
+	}
+	e.gpuInputBuffers = nil
+	e.gpuInputTensors = nil
 }
 
 // Execute runs the executable with the provided inputs.
@@ -110,6 +190,18 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 			if buf.wrapper == nil || buf.wrapper.jsTensor.IsUndefined() {
 				return nil, errors.Errorf("input %d is finalized", i)
 			}
+
+			// If WebGPU pre-allocated GPU buffer is available, upload directly via device.queue.writeBuffer
+			if e.isWebGPU && i < len(e.gpuInputBuffers) && !e.gpuInputBuffers[i].IsUndefined() && !e.gpuInputBuffers[i].IsNull() {
+				dataProp := buf.wrapper.jsTensor.Get("data")
+				if !dataProp.IsUndefined() && !dataProp.IsNull() {
+					queue := e.gpuDevice.Get("queue")
+					queue.Call("writeBuffer", e.gpuInputBuffers[i], 0, dataProp)
+					feeds.Set(e.inputNames[i], e.gpuInputTensors[i])
+					continue
+				}
+			}
+
 			feeds.Set(e.inputNames[i], buf.wrapper.jsTensor)
 		}
 	}
