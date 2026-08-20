@@ -5,7 +5,9 @@
 
 **ONNX Runtime** based compute backend for GoMLX.
 
-It allows GoMLX models to be executed via ONNX Runtime using either CPU or CUDA (NVIDIA GPU).
+It allows GoMLX models to be executed via ONNX Runtime using:
+- **Native Desktop/Server**: CPU or CUDA (NVIDIA GPU).
+- **WebAssembly / Browser**: WebGPU, CPU (WASM SIMD), WebNN, or WebGL in browsers (see [ORT Web Guide](docs/ort-web.md)).
 
 It supports dynamic shapes and exporting models to `.onnx` files.
 

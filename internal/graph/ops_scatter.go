@@ -79,9 +79,9 @@ func (f *Function) scatter(
 		}
 	}
 
-	// Cast indices to int32/int64 if necessary
+	// Cast indices to int64 for standard ONNX ScatterND
 	indicesInput := indicesNode
-	if indicesNode.shape.DType != dtypes.Int32 && indicesNode.shape.DType != dtypes.Int64 {
+	if indicesNode.shape.DType != dtypes.Int64 {
 		casted, err := f.ConvertDType(indicesNode, dtypes.Int64)
 		if err != nil {
 			return nil, err
