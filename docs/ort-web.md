@@ -185,3 +185,33 @@ GOOS=js GOARCH=wasm go test -exec wasmbrowsertest ./...
 # 3. Run tests in browser window with full WebGPU hardware acceleration
 WASM_HEADLESS=off GOOS=js GOARCH=wasm go test -exec wasmbrowsertest ./...
 ```
+
+---
+
+## 6. Performance Characteristics & WebGPU Latency
+
+When choosing between `onnx:webgpu` and `onnx:wasm` (CPU SIMD), consider the fixed dispatch and synchronization latency of browser-based WebGPU:
+
+### 1. High Fixed WebGPU Latency Floor (~1.5ms – 2.5ms per call)
+In modern web browsers, executing a WebGPU computation requires:
+1. Encoding GPU commands in JavaScript.
+2. IPC message passing from the browser renderer process to the GPU process.
+3. GPU command buffer execution and fence synchronization.
+4. Asynchronous Promise resolution (`mapAsync`) across the browser microtask queue back to Go WebAssembly.
+
+Because of this architectural pipeline, **every single `Execute()` call on WebGPU incurs an irreducible baseline latency of ~1.5ms to 2.5ms**, regardless of how tiny the model is.
+
+### 2. When to Use `onnx:wasm` (CPU) vs `onnx:webgpu` (GPU)
+
+* **Small Models & Real-Time Sequential Loops (e.g. Board Game MCTS, Simple FNNs, Tabular Models)**:
+  - **Recommended: `onnx:wasm` (`onnx:cpu`)**.
+  - Small neural networks take only ~20–200 µs on the CPU with WebAssembly SIMD. Running them on WebGPU incurs the ~2ms browser dispatch floor per step, making WebGPU appear 10x–50x slower for single-sample evaluations.
+* **Large Compute-Heavy Models & Large Batches (e.g. Vision Models, Transformers, Large Embeddings)**:
+  - **Recommended: `onnx:webgpu` (`onnx:gpu`)**.
+  - When the arithmetic workload takes > 10ms on the CPU, WebGPU's massive parallel compute shader throughput easily amortizes the ~2ms dispatch latency.
+* **Batching on WebGPU**:
+  - If you must use WebGPU for search trees or iterative inference, **batch multiple inputs (e.g. 32–128 items) into a single execution call**. The WebGPU dispatch overhead remains ~2ms whether evaluating 1 item or 100 items, multiplying effective throughput.
+
+### 3. Automatic Input GPU Buffer Pre-allocation
+`compute-onnx` automatically pre-allocates static-shaped input `GPUBuffer` descriptors when creating WebGPU executables and streams dynamic inputs via WebGPU's bulk DMA `device.queue.writeBuffer(...)`. This eliminates per-step memory allocations and minimizes multi-input graph overhead.
+
