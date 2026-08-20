@@ -74,6 +74,10 @@ func New(config string) (compute.Backend, error) {
 		return nil, err
 	}
 
+	if ep == "webgpu" && !web.HasWebGPU() {
+		return nil, errors.New("WebGPU is not available or failed to acquire a GPU adapter in the current browser environment (navigator.gpu is unavailable or requestAdapter() failed; in Chrome, this may require running with GPU hardware acceleration or enabling --enable-unsafe-webgpu)")
+	}
+
 	if ep == "webnn" && !web.HasWebNN() {
 		return nil, errors.New("WebNN is not available in the current browser environment (navigator.ml is undefined); WebNN is experimental in most browsers and typically requires enabling a browser flag such as chrome://flags/#web-machine-learning-neural-network)")
 	}
