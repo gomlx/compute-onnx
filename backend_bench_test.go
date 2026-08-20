@@ -14,6 +14,142 @@ import (
 func BenchmarkTransfer(b *testing.B) {
 	sizes := []int{10, 1000, 1_000_000}
 
+	// Breakdown benchmark for 10 floats to see exactly where time goes
+	b.Run("Breakdown_Size10", func(b *testing.B) {
+		builder := backend.Builder("breakdown_10")
+		fn := builder.Main()
+		shape := shapes.Make(dtypes.Float32, 10)
+
+		xParam, err := fn.Parameter("x", shape, nil)
+		if err != nil {
+			b.Fatalf("failed to create param x: %+v", err)
+		}
+		oneScalar, err := fn.Constant([]float32{1.0})
+		if err != nil {
+			b.Fatalf("failed to create scalar 1.0: %+v", err)
+		}
+		outVal, err := fn.Add(xParam, oneScalar)
+		if err != nil {
+			b.Fatalf("failed to create Add: %+v", err)
+		}
+		fn.Return([]compute.Value{outVal}, nil)
+
+		exec, err := builder.Compile()
+		if err != nil {
+			b.Fatalf("failed to compile: %+v", err)
+		}
+		defer exec.Finalize()
+
+		xData := make([]float32, 10)
+		outData := make([]float32, 10)
+
+		// Measure BufferFromFlatData alone
+		b.Run("1_BufferFromFlatData", func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				inBuf, _ := backend.BufferFromFlatData(0, xData, shape)
+				_ = inBuf.Finalize()
+			}
+		})
+
+		// Measure Execute alone (pre-created buffer)
+		b.Run("2_Execute_PrecreatedBuffer", func(b *testing.B) {
+			inBuf, _ := backend.BufferFromFlatData(0, xData, shape)
+			defer inBuf.Finalize()
+
+			for i := 0; i < b.N; i++ {
+				outBufs, errExec := exec.Execute([]compute.Buffer{inBuf}, []bool{false}, 0)
+				if errExec != nil {
+					b.Fatalf("Execute failed: %+v", errExec)
+				}
+				_ = outBufs[0].Finalize()
+			}
+		})
+
+		// Measure Execute + ToFlatData
+		b.Run("3_Execute_Plus_ToFlatData", func(b *testing.B) {
+			inBuf, _ := backend.BufferFromFlatData(0, xData, shape)
+			defer inBuf.Finalize()
+
+			for i := 0; i < b.N; i++ {
+				outBufs, errExec := exec.Execute([]compute.Buffer{inBuf}, []bool{false}, 0)
+				if errExec != nil {
+					b.Fatalf("Execute failed: %+v", errExec)
+				}
+				_ = outBufs[0].ToFlatData(outData)
+				_ = outBufs[0].Finalize()
+			}
+		})
+	})
+
+	// Breakdown benchmark for 4 inputs of Size 10
+	b.Run("Breakdown_4Inputs_Size10", func(b *testing.B) {
+		builder := backend.Builder("breakdown_4_10")
+		fn := builder.Main()
+		shape := shapes.Make(dtypes.Float32, 10)
+
+		aParam, _ := fn.Parameter("a", shape, nil)
+		bParam, _ := fn.Parameter("b", shape, nil)
+		cParam, _ := fn.Parameter("c", shape, nil)
+		dParam, _ := fn.Parameter("d", shape, nil)
+
+		ab, _ := fn.Add(aParam, bParam)
+		abc, _ := fn.Add(ab, cParam)
+		abcd, _ := fn.Add(abc, dParam)
+		sumVal, _ := fn.ReduceSum(abcd)
+		fn.Return([]compute.Value{sumVal}, nil)
+
+		exec, err := builder.Compile()
+		if err != nil {
+			b.Fatalf("failed to compile: %+v", err)
+		}
+		defer exec.Finalize()
+
+		dataSlice := make([]float32, 10)
+		for i := range dataSlice {
+			dataSlice[i] = 1.0
+		}
+		outData := make([]float32, 1)
+
+		b.Run("1_Execute_PrecreatedBuffers", func(b *testing.B) {
+			inA, _ := backend.BufferFromFlatData(0, dataSlice, shape)
+			inB, _ := backend.BufferFromFlatData(0, dataSlice, shape)
+			inC, _ := backend.BufferFromFlatData(0, dataSlice, shape)
+			inD, _ := backend.BufferFromFlatData(0, dataSlice, shape)
+			defer inA.Finalize()
+			defer inB.Finalize()
+			defer inC.Finalize()
+			defer inD.Finalize()
+
+			for i := 0; i < b.N; i++ {
+				outBufs, errExec := exec.Execute([]compute.Buffer{inA, inB, inC, inD}, []bool{false, false, false, false}, 0)
+				if errExec != nil {
+					b.Fatalf("Execute failed: %+v", errExec)
+				}
+				_ = outBufs[0].Finalize()
+			}
+		})
+
+		b.Run("2_Execute_Plus_ToFlatData", func(b *testing.B) {
+			inA, _ := backend.BufferFromFlatData(0, dataSlice, shape)
+			inB, _ := backend.BufferFromFlatData(0, dataSlice, shape)
+			inC, _ := backend.BufferFromFlatData(0, dataSlice, shape)
+			inD, _ := backend.BufferFromFlatData(0, dataSlice, shape)
+			defer inA.Finalize()
+			defer inB.Finalize()
+			defer inC.Finalize()
+			defer inD.Finalize()
+
+			for i := 0; i < b.N; i++ {
+				outBufs, errExec := exec.Execute([]compute.Buffer{inA, inB, inC, inD}, []bool{false, false, false, false}, 0)
+				if errExec != nil {
+					b.Fatalf("Execute failed: %+v", errExec)
+				}
+				_ = outBufs[0].ToFlatData(outData)
+				_ = outBufs[0].Finalize()
+			}
+		})
+	})
+
 	// 1. Benchmark f(x) = x + 1
 	b.Run("AddScalar_f(x)=x+1", func(b *testing.B) {
 		for _, size := range sizes {

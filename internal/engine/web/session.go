@@ -13,6 +13,7 @@ import (
 // Session wraps a JavaScript ort.InferenceSession.
 type Session struct {
 	jsSession js.Value
+	ep        string
 }
 
 // CreateSession creates an onnxruntime-web InferenceSession from model bytes.
@@ -60,6 +61,7 @@ func CreateSession(modelBytes []byte, executionProvider string, logSeverity int)
 
 	return &Session{
 		jsSession: jsSess,
+		ep:        executionProvider,
 	}, nil
 }
 
@@ -73,6 +75,20 @@ func (s *Session) Run(feeds js.Value) (js.Value, error) {
 	results, err := Await(runPromise)
 	if err != nil {
 		return js.Undefined(), errors.Wrap(err, "session.run failed")
+	}
+	return results, nil
+}
+
+// RunWithFetches executes the inference session with pre-allocated output fetches.
+func (s *Session) RunWithFetches(feeds, fetches js.Value) (js.Value, error) {
+	if s.jsSession.IsUndefined() || s.jsSession.IsNull() {
+		return js.Undefined(), errors.New("cannot run on finalized session")
+	}
+
+	runPromise := s.jsSession.Call("run", feeds, fetches)
+	results, err := Await(runPromise)
+	if err != nil {
+		return js.Undefined(), errors.Wrap(err, "session.run with fetches failed")
 	}
 	return results, nil
 }
