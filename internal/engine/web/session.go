@@ -16,7 +16,7 @@ type Session struct {
 }
 
 // CreateSession creates an onnxruntime-web InferenceSession from model bytes.
-func CreateSession(modelBytes []byte, executionProvider string) (*Session, error) {
+func CreateSession(modelBytes []byte, executionProvider string, logSeverity int) (*Session, error) {
 	if err := EnsureORTLoaded(); err != nil {
 		return nil, errors.Wrap(err, "failed to initialize onnxruntime-web")
 	}
@@ -45,6 +45,12 @@ func CreateSession(modelBytes []byte, executionProvider string) (*Session, error
 		eps.Call("push", "wasm")
 	}
 	options.Set("executionProviders", eps)
+
+	logSev := logSeverity
+	if logSev < 0 {
+		logSev = 3 // ERROR by default
+	}
+	options.Set("logSeverityLevel", logSev)
 
 	createPromise := inferenceSession.Call("create", jsU8, options)
 	jsSess, err := Await(createPromise)

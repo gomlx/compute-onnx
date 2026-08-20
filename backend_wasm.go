@@ -5,6 +5,7 @@
 package onnxbackend
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/gomlx/compute"
@@ -25,13 +26,14 @@ func IsSupportedPlatform() bool {
 	return true
 }
 
-func parseConfig(config string) (ep string, err error) {
+func parseConfig(config string) (ep string, logSeverity int, err error) {
 	config = strings.TrimSpace(config)
+	logSeverity = -1
 	if config == "" {
 		if web.HasWebGPU() {
-			return "webgpu", nil
+			return "webgpu", -1, nil
 		}
-		return "wasm", nil
+		return "wasm", -1, nil
 	}
 	if strings.Contains(config, ":") || strings.EqualFold(config, "onnx") || strings.EqualFold(config, "onnxruntime") {
 		parsed, errEnv := ParseGOMLXBackendEnv(config)
@@ -41,20 +43,36 @@ func parseConfig(config string) (ep string, err error) {
 	}
 	parts := strings.Split(config, ",")
 	for _, part := range parts {
-		part = strings.ToLower(strings.TrimSpace(part))
+		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		if part == "webgpu" || part == "gpu" {
+		if strings.Contains(part, "=") {
+			kv := strings.SplitN(part, "=", 2)
+			key := strings.ToLower(strings.TrimSpace(kv[0]))
+			val := strings.TrimSpace(kv[1])
+			if key == "log" {
+				var level int
+				if _, errScan := fmt.Sscanf(val, "%d", &level); errScan != nil {
+					return "", 0, errors.Errorf("invalid log level: %q", val)
+				}
+				logSeverity = max(3-level, 0)
+			} else {
+				return "", 0, errors.Errorf("unknown configuration option %q", key)
+			}
+			continue
+		}
+		partLower := strings.ToLower(part)
+		if partLower == "webgpu" || partLower == "gpu" {
 			ep = "webgpu"
-		} else if part == "wasm" || part == "cpu" {
+		} else if partLower == "wasm" || partLower == "cpu" {
 			ep = "wasm"
-		} else if part == "webgl" {
+		} else if partLower == "webgl" {
 			ep = "webgl"
-		} else if part == "webnn" {
+		} else if partLower == "webnn" {
 			ep = "webnn"
 		} else {
-			return "", errors.Errorf("unknown web backend option: %q (expected \"webgpu\", \"wasm\", \"webgl\", \"webnn\", or \"cpu\"/\"gpu\")", part)
+			return "", 0, errors.Errorf("unknown web backend option: %q (expected \"webgpu\", \"wasm\", \"webgl\", \"webnn\", or \"cpu\"/\"gpu\")", part)
 		}
 	}
 	if ep == "" {
@@ -64,12 +82,12 @@ func parseConfig(config string) (ep string, err error) {
 			ep = "wasm"
 		}
 	}
-	return ep, nil
+	return ep, logSeverity, nil
 }
 
 // New creates a new ONNX Runtime Web backend instance.
 func New(config string) (compute.Backend, error) {
-	ep, err := parseConfig(config)
+	ep, logSeverity, err := parseConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -89,13 +107,14 @@ func New(config string) (compute.Backend, error) {
 	return &Backend{
 		config:            config,
 		executionProvider: ep,
+		logSeverity:       logSeverity,
 	}, nil
 }
 
 func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape, modelProto *onnx.ModelProto) (compute.Executable, error) {
 
-	session, err := web.CreateSession(modelBytes, b.executionProvider)
+	session, err := web.CreateSession(modelBytes, b.executionProvider, b.logSeverity)
 	if err != nil {
 		return nil, err
 	}
