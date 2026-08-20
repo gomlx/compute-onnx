@@ -39,9 +39,8 @@ func CreateSession(modelBytes []byte, executionProvider string) (*Session, error
 	// Create session options
 	options := global.Get("Object").New()
 	eps := global.Get("Array").New()
-	if executionProvider != "" && executionProvider != "wasm" {
+	if executionProvider != "" {
 		eps.Call("push", executionProvider)
-		eps.Call("push", "wasm") // Fallback to wasm if hardware provider fails
 	} else {
 		eps.Call("push", "wasm")
 	}
