@@ -52,7 +52,7 @@ func Await(promise js.Value) (js.Value, error) {
 	return res.val, res.err
 }
 
-// HasWebGPU checks if the WebGPU API (navigator.gpu) is present and available in the browser.
+// HasWebGPU checks if the WebGPU API (navigator.gpu) is present and an adapter is available in the browser.
 func HasWebGPU() bool {
 	global := js.Global()
 	nav := global.Get("navigator")
@@ -60,7 +60,19 @@ func HasWebGPU() bool {
 		return false
 	}
 	gpu := nav.Get("gpu")
-	return !gpu.IsUndefined() && !gpu.IsNull()
+	if gpu.IsUndefined() || gpu.IsNull() {
+		return false
+	}
+	requestAdapter := gpu.Get("requestAdapter")
+	if requestAdapter.IsUndefined() || requestAdapter.IsNull() {
+		return false
+	}
+	promise := gpu.Call("requestAdapter")
+	adapter, err := Await(promise)
+	if err != nil || adapter.IsUndefined() || adapter.IsNull() {
+		return false
+	}
+	return true
 }
 
 // HasWebNN checks if the WebNN API (navigator.ml) is present and available in the browser.
