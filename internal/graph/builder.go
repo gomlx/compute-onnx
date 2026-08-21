@@ -15,10 +15,11 @@ type CompilerFn func(b *Builder) (compute.Executable, error)
 // Builder implements [compute.Builder] for building ONNX computation graphs.
 type Builder struct {
 	notimplemented.Builder
-	name      string
-	compileFn CompilerFn
-	mainFn    *Function
-	funcs     map[string]*Function
+	name              string
+	executionProvider string
+	compileFn         CompilerFn
+	mainFn            *Function
+	funcs             map[string]*Function
 }
 
 var _ compute.Builder = (*Builder)(nil)
@@ -51,6 +52,21 @@ func (b *Builder) Main() compute.Function {
 // MainFunction returns the strongly typed main *Function.
 func (b *Builder) MainFunction() *Function {
 	return b.mainFn
+}
+
+// SetExecutionProvider sets the target execution provider (e.g. "webgpu", "wasm", "cuda").
+func (b *Builder) SetExecutionProvider(ep string) {
+	b.executionProvider = ep
+}
+
+// ExecutionProvider returns the target execution provider.
+func (b *Builder) ExecutionProvider() string {
+	return b.executionProvider
+}
+
+// IsWebGPU returns true if targeting the WebGPU execution provider.
+func (b *Builder) IsWebGPU() bool {
+	return b.executionProvider == "webgpu"
 }
 
 // Functions returns all registered functions in the builder.

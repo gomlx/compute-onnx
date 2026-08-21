@@ -160,7 +160,7 @@ func (b *Backend) IsFinalized() bool {
 }
 
 func (b *Backend) Builder(name string) compute.Builder {
-	return graph.NewBuilder(name, func(gb *graph.Builder) (compute.Executable, error) {
+	gb := graph.NewBuilder(name, func(gb *graph.Builder) (compute.Executable, error) {
 		compiled, err := graph.CompileToProto(gb)
 		if err != nil {
 			return nil, err
@@ -176,6 +176,8 @@ func (b *Backend) Builder(name string) compute.Builder {
 
 		return b.createExecutable(compiled.ModelBytes, compiled.InputNames, compiled.InputShapes, compiled.OutputNames, compiled.OutputShapes, compiled.Model)
 	})
+	gb.SetExecutionProvider(b.executionProvider)
+	return gb
 }
 
 // onnxExecutable is an internal interface for Executable instances that have backend and ModelProto methods.
