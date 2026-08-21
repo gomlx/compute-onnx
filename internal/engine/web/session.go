@@ -56,6 +56,28 @@ func CreateSession(modelBytes []byte, executionProvider string, logSeverity int,
 	if logSev < 0 {
 		logSev = 3 // ERROR by default
 	}
+	options.Set("logSeverityLevel", logSev)
+
+	env := ortVal.Get("env")
+	if !env.IsUndefined() && !env.IsNull() {
+		var levelStr string
+		switch logSev {
+		case 0:
+			levelStr = "verbose"
+		case 1:
+			levelStr = "info"
+		case 2:
+			levelStr = "warning"
+		case 3:
+			levelStr = "error"
+		case 4:
+			levelStr = "fatal"
+		default:
+			levelStr = "error"
+		}
+		env.Set("logLevel", levelStr)
+	}
+
 	createPromise := inferenceSession.Call("create", jsU8, options)
 	jsSess, err := Await(createPromise)
 	if err != nil {

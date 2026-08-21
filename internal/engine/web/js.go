@@ -214,13 +214,14 @@ func EnsureORTLoaded() error {
 		return errors.New("timed out waiting for onnxruntime-web script to load")
 	}
 
-	// Configure wasm paths
+	// Configure wasm paths and default logLevel
 	ortVal = global.Get("ort")
 	if ortVal.IsUndefined() || ortVal.IsNull() {
 		return errors.New("window.ort is still undefined after script load")
 	}
 	env := ortVal.Get("env")
 	if !env.IsUndefined() && !env.IsNull() {
+		env.Set("logLevel", "error")
 		wasmEnv := env.Get("wasm")
 		if !wasmEnv.IsUndefined() && !wasmEnv.IsNull() {
 			wasmEnv.Set("wasmPaths", "https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/")
