@@ -250,6 +250,68 @@ func (f *Function) Slice(x compute.Value, start []int, limit []int, stride []int
 	return f.addNode(node), nil
 }
 
+func (f *Function) reverseForWebGPU(xNode *Node, axes []int) (compute.Value, error) {
+	// Use Gather on WebGPU to avoid WebGPU Slice clamping bug on negative step.
+	currentNode := xNode
+	for _, a := range axes {
+		effAxis := a
+		if effAxis < 0 {
+			effAxis += xNode.shape.Rank()
+		}
+		dim := xNode.shape.Dimensions[effAxis]
+		if dim <= 0 {
+			// Fallback to Slice for dynamic dimensions
+			startsConst, err := f.Constant([]int64{-1}, 1)
+			if err != nil {
+				return nil, err
+			}
+			endsConst, err := f.Constant([]int64{math.MinInt32}, 1)
+			if err != nil {
+				return nil, err
+			}
+			axesConst, err := f.Constant([]int64{int64(effAxis)}, 1)
+			if err != nil {
+				return nil, err
+			}
+			stepsConst, err := f.Constant([]int64{-1}, 1)
+			if err != nil {
+				return nil, err
+			}
+			node := &Node{
+				opType: "Slice",
+				inputs: []*Node{currentNode, startsConst.(*Node), endsConst.(*Node), axesConst.(*Node), stepsConst.(*Node)},
+				shape:  currentNode.shape,
+			}
+			currentNode = f.addNode(node)
+			continue
+		}
+
+		revIndices := make([]int64, dim)
+		for j := range dim {
+			revIndices[j] = int64(dim - 1 - j)
+		}
+		indicesConst, err := f.Constant(revIndices, dim)
+		if err != nil {
+			return nil, err
+		}
+
+		node := &Node{
+			opType: "Gather",
+			inputs: []*Node{currentNode, indicesConst.(*Node)},
+			shape:  currentNode.shape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "axis",
+					Type: onnx.AttributeProto_INT,
+					I:    int64(effAxis),
+				},
+			},
+		}
+		currentNode = f.addNode(node)
+	}
+	return currentNode, nil
+}
+
 func (f *Function) Reverse(x compute.Value, axes ...int) (compute.Value, error) {
 	xNode, ok := x.(*Node)
 	if !ok {
@@ -260,6 +322,11 @@ func (f *Function) Reverse(x compute.Value, axes ...int) (compute.Value, error) 
 		return xNode, nil
 	}
 
+	if f.isWebGPU() {
+		return f.reverseForWebGPU(xNode, axes)
+	}
+
+	// Standard Slice for other backends (CPU, CUDA, WASM CPU)
 	starts := make([]int64, len(axes))
 	ends := make([]int64, len(axes))
 	steps := make([]int64, len(axes))
