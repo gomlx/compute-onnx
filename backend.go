@@ -11,7 +11,6 @@ import (
 	"github.com/gomlx/compute-onnx/internal/graph"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
-	"github.com/gomlx/compute/dtypes/gotype"
 	"github.com/pkg/errors"
 )
 
@@ -25,18 +24,22 @@ type Function = graph.Function
 type Node = graph.Node
 
 // MakeScalar constructs a 0D scalar constant tensor in the given function.
-func MakeScalar[T gotype.NumericNotComplex](f *graph.Function, value T, dtype dtypes.DType) (compute.Value, error) {
+func MakeScalar(f *graph.Function, value any, dtype dtypes.DType) (compute.Value, error) {
 	return graph.MakeScalar(f, value, dtype)
 }
 
 // Backend represents an ONNX Runtime backed [compute.Backend].
 type Backend struct {
-	config            string
-	cuda              bool
-	executionProvider string
-	logSeverity       int
-	isFinalized       bool
-	keepModelProto    bool
+	config             string
+	version            string
+	cuda               bool
+	executionProvider  string
+	logSeverity        int
+	enableGraphCapture bool
+	hasFloat16         bool
+	hasBFloat16        bool
+	isFinalized        bool
+	keepModelProto     bool
 }
 
 // SetKeepModelProto controls whether compiled Executable instances retain the graph *onnx.ModelProto.
@@ -49,6 +52,16 @@ func (b *Backend) SetKeepModelProto(keep bool) {
 // KeepModelProto returns whether compiled Executable instances retain their graph *onnx.ModelProto.
 func (b *Backend) KeepModelProto() bool {
 	return b.keepModelProto
+}
+
+// LogSeverity returns the configured log severity level (0=verbose, 1=info, 2=warning, 3=error, 4=fatal, or -1 if not set).
+func (b *Backend) LogSeverity() int {
+	return b.logSeverity
+}
+
+// ExecutionProvider returns the execution provider configured for the backend (e.g. "webgpu", "wasm", "cuda", or "").
+func (b *Backend) ExecutionProvider() string {
+	return b.executionProvider
 }
 
 var _ compute.Backend = (*Backend)(nil)
@@ -83,18 +96,31 @@ func (b *Backend) Name() string {
 	return BackendName
 }
 
+func (b *Backend) Config() string {
+	return b.config
+}
+
 func (b *Backend) String() string {
 	return b.Name()
 }
 
+// Version returns the version of the underlying ONNX Runtime engine.
+func (b *Backend) Version() string {
+	return b.version
+}
+
 func (b *Backend) Description() string {
+	verStr := ""
+	if b.version != "" {
+		verStr = fmt.Sprintf(" v%s", b.version)
+	}
 	if b.executionProvider != "" {
-		return fmt.Sprintf("ONNX Runtime Web (%s) compute backend for GoMLX", b.executionProvider)
+		return fmt.Sprintf("ONNX Runtime Web%s (%s) compute backend for GoMLX", verStr, b.executionProvider)
 	}
 	if b.cuda {
-		return "ONNX Runtime (CUDA GPU) compute backend for GoMLX"
+		return fmt.Sprintf("ONNX Runtime%s (CUDA GPU) compute backend for GoMLX", verStr)
 	}
-	return "ONNX Runtime (CPU) compute backend for GoMLX"
+	return fmt.Sprintf("ONNX Runtime%s (CPU) compute backend for GoMLX", verStr)
 }
 
 func (b *Backend) NumDevices() int {
@@ -120,8 +146,8 @@ func (b *Backend) Capabilities() compute.Capabilities {
 	}
 	caps.DTypes[dtypes.Float32] = true
 	caps.DTypes[dtypes.Float64] = true
-	caps.DTypes[dtypes.Float16] = true
-	caps.DTypes[dtypes.BFloat16] = true
+	caps.DTypes[dtypes.Float16] = b.hasFloat16
+	caps.DTypes[dtypes.BFloat16] = b.hasBFloat16
 	caps.DTypes[dtypes.Int32] = true
 	caps.DTypes[dtypes.Int64] = true
 	caps.DTypes[dtypes.Bool] = true
@@ -143,13 +169,25 @@ func (b *Backend) IsFinalized() bool {
 }
 
 func (b *Backend) Builder(name string) compute.Builder {
-	return graph.NewBuilder(name, func(gb *graph.Builder) (compute.Executable, error) {
+	gb := graph.NewBuilder(name, func(gb *graph.Builder) (compute.Executable, error) {
 		compiled, err := graph.CompileToProto(gb)
 		if err != nil {
 			return nil, err
 		}
+
+		// Validate all used dtypes are supported by this backend
+		caps := b.Capabilities()
+		for dt := range compiled.UsedDTypes {
+			if !caps.DTypes[dt] {
+				return nil, errors.Wrapf(compute.ErrNotImplemented, "dtype %s is not supported by %s", dt, b.Description())
+			}
+		}
+
 		return b.createExecutable(compiled.ModelBytes, compiled.InputNames, compiled.InputShapes, compiled.OutputNames, compiled.OutputShapes, compiled.Model)
 	})
+	gb.SetExecutionProvider(b.executionProvider)
+	gb.SetLogSeverity(b.logSeverity)
+	return gb
 }
 
 // onnxExecutable is an internal interface for Executable instances that have backend and ModelProto methods.

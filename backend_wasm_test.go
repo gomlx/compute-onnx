@@ -6,6 +6,7 @@ package onnxbackend
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"syscall/js"
 	"testing"
@@ -17,10 +18,15 @@ import (
 
 func setup() {
 	fmt.Printf("Available backends (WASM): %q\n", compute.List())
+	backendName := os.Getenv("GOMLX_BACKEND")
 	var errNew error
-	backend, errNew = New("")
+	if backendName == "" {
+		backend, errNew = compute.New()
+	} else {
+		backend, errNew = compute.NewWithConfig(backendName)
+	}
 	if errNew != nil {
-		klog.Fatalf("Failed to create backend: %+v", errNew)
+		klog.Fatalf("Failed to create backend (%q): %+v", backendName, errNew)
 	}
 	fmt.Printf("Backend: %s, %s\n", backend.Name(), backend.Description())
 }
@@ -77,7 +83,44 @@ func TestWebNNPresenceCheck(t *testing.T) {
 	}
 	defer b.Finalize()
 
-	if b.Description() != "ONNX Runtime Web (webnn) compute backend for GoMLX" {
+	if !strings.HasPrefix(b.Description(), "ONNX Runtime Web") || !strings.HasSuffix(b.Description(), "(webnn) compute backend for GoMLX") {
 		t.Errorf("unexpected description: %s", b.Description())
+	}
+}
+
+func TestParseConfigGraphCapture(t *testing.T) {
+	tests := []struct {
+		config             string
+		wantEP             string
+		wantGraphCapture   bool
+		wantErr            bool
+	}{
+		{config: "", wantEP: "webgpu", wantGraphCapture: false},
+		{config: "wasm", wantEP: "wasm", wantGraphCapture: false},
+		{config: "webgpu", wantEP: "webgpu", wantGraphCapture: false},
+		{config: "webgpu,graph_capture=true", wantEP: "webgpu", wantGraphCapture: true},
+		{config: "webgpu,graph_capture=1", wantEP: "webgpu", wantGraphCapture: true},
+		{config: "webgpu,graph_capture=false", wantEP: "webgpu", wantGraphCapture: false},
+		{config: "webgpu,graph_capture=0", wantEP: "webgpu", wantGraphCapture: false},
+		{config: "webgpu,graph_capture", wantEP: "webgpu", wantGraphCapture: true},
+		{config: "onnx:webgpu,graph_capture=true,log=2", wantEP: "webgpu", wantGraphCapture: true},
+		{config: "webgpu,graph_capture=invalid_bool", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.config, func(t *testing.T) {
+			ep, _, gc, err := parseConfig(tt.config)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseConfig(%q) error = %v, wantErr %v", tt.config, err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				if ep != tt.wantEP && !(tt.config == "" && !web.HasWebGPU() && ep == "wasm") {
+					t.Errorf("ep = %v, want %v", ep, tt.wantEP)
+				}
+				if gc != tt.wantGraphCapture {
+					t.Errorf("graphCapture = %v, want %v", gc, tt.wantGraphCapture)
+				}
+			}
+		})
 	}
 }

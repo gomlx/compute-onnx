@@ -6,6 +6,7 @@ package onnxbackend
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gomlx/compute"
@@ -26,14 +27,14 @@ func IsSupportedPlatform() bool {
 	return true
 }
 
-func parseConfig(config string) (ep string, logSeverity int, err error) {
+func parseConfig(config string) (ep string, logSeverity int, enableGraphCapture bool, err error) {
 	config = strings.TrimSpace(config)
 	logSeverity = -1
 	if config == "" {
 		if web.HasWebGPU() {
-			return "webgpu", -1, nil
+			return "webgpu", -1, false, nil
 		}
-		return "wasm", -1, nil
+		return "wasm", -1, false, nil
 	}
 	if strings.Contains(config, ":") || strings.EqualFold(config, "onnx") || strings.EqualFold(config, "onnxruntime") {
 		parsed, errEnv := ParseGOMLXBackendEnv(config)
@@ -50,15 +51,21 @@ func parseConfig(config string) (ep string, logSeverity int, err error) {
 		if strings.Contains(part, "=") {
 			kv := strings.SplitN(part, "=", 2)
 			key := strings.ToLower(strings.TrimSpace(kv[0]))
-			val := strings.TrimSpace(kv[1])
+			val := strings.ToLower(strings.TrimSpace(kv[1]))
 			if key == "log" {
 				var level int
 				if _, errScan := fmt.Sscanf(val, "%d", &level); errScan != nil {
-					return "", 0, errors.Errorf("invalid log level: %q", val)
+					return "", 0, false, errors.Errorf("invalid log level: %q", val)
 				}
 				logSeverity = max(3-level, 0)
+			} else if key == "graph_capture" || key == "graphcapture" || key == "enable_graph_capture" || key == "enablegraphcapture" {
+				var errBool error
+				enableGraphCapture, errBool = strconv.ParseBool(val)
+				if errBool != nil {
+					return "", 0, false, errors.Wrapf(errBool, "invalid boolean value for %q: %q", key, val)
+				}
 			} else {
-				return "", 0, errors.Errorf("unknown configuration option %q", key)
+				return "", 0, false, errors.Errorf("unknown configuration option %q", key)
 			}
 			continue
 		}
@@ -71,8 +78,10 @@ func parseConfig(config string) (ep string, logSeverity int, err error) {
 			ep = "webgl"
 		} else if partLower == "webnn" {
 			ep = "webnn"
+		} else if partLower == "graph_capture" || partLower == "graphcapture" {
+			enableGraphCapture = true
 		} else {
-			return "", 0, errors.Errorf("unknown web backend option: %q (expected \"webgpu\", \"wasm\", \"webgl\", \"webnn\", or \"cpu\"/\"gpu\")", part)
+			return "", 0, false, errors.Errorf("unknown web backend option: %q (expected \"webgpu\", \"wasm\", \"webgl\", \"webnn\", \"graph_capture\", or \"cpu\"/\"gpu\")", part)
 		}
 	}
 	if ep == "" {
@@ -82,12 +91,12 @@ func parseConfig(config string) (ep string, logSeverity int, err error) {
 			ep = "wasm"
 		}
 	}
-	return ep, logSeverity, nil
+	return ep, logSeverity, enableGraphCapture, nil
 }
 
 // New creates a new ONNX Runtime Web backend instance.
 func New(config string) (compute.Backend, error) {
-	ep, logSeverity, err := parseConfig(config)
+	ep, logSeverity, enableGraphCapture, err := parseConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -104,17 +113,28 @@ func New(config string) (compute.Backend, error) {
 		return nil, errors.Wrap(err, "failed to initialize onnxruntime-web")
 	}
 
+	hasFloat16 := false
+	if ep == "webgpu" {
+		hasFloat16 = web.HasWebGPUFloat16()
+	} else if ep == "wasm" || ep == "" {
+		hasFloat16 = true // ORT Web WebAssembly CPU runtime supports float16 models
+	}
+
 	return &Backend{
-		config:            config,
-		executionProvider: ep,
-		logSeverity:       logSeverity,
+		config:             config,
+		version:            web.GetVersion(),
+		executionProvider:  ep,
+		logSeverity:        logSeverity,
+		enableGraphCapture: enableGraphCapture,
+		hasFloat16:         hasFloat16,
+		hasBFloat16:        false,
 	}, nil
 }
 
 func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape, modelProto *onnx.ModelProto) (compute.Executable, error) {
 
-	session, err := web.CreateSession(modelBytes, b.executionProvider, b.logSeverity)
+	session, err := web.CreateSession(modelBytes, b.executionProvider, b.logSeverity, b.enableGraphCapture)
 	if err != nil {
 		return nil, err
 	}

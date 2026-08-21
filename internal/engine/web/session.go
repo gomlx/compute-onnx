@@ -5,8 +5,10 @@
 package web
 
 import (
+	"strings"
 	"syscall/js"
 
+	"github.com/gomlx/compute"
 	"github.com/pkg/errors"
 )
 
@@ -17,7 +19,7 @@ type Session struct {
 }
 
 // CreateSession creates an onnxruntime-web InferenceSession from model bytes.
-func CreateSession(modelBytes []byte, executionProvider string, logSeverity int) (*Session, error) {
+func CreateSession(modelBytes []byte, executionProvider string, logSeverity int, enableGraphCapture bool) (*Session, error) {
 	if err := EnsureORTLoaded(); err != nil {
 		return nil, errors.Wrap(err, "failed to initialize onnxruntime-web")
 	}
@@ -46,6 +48,9 @@ func CreateSession(modelBytes []byte, executionProvider string, logSeverity int)
 		eps.Call("push", "wasm")
 	}
 	options.Set("executionProviders", eps)
+	if enableGraphCapture && executionProvider == "webgpu" {
+		options.Set("enableGraphCapture", true)
+	}
 
 	logSev := logSeverity
 	if logSev < 0 {
@@ -53,9 +58,33 @@ func CreateSession(modelBytes []byte, executionProvider string, logSeverity int)
 	}
 	options.Set("logSeverityLevel", logSev)
 
+	env := ortVal.Get("env")
+	if !env.IsUndefined() && !env.IsNull() {
+		var levelStr string
+		switch logSev {
+		case 0:
+			levelStr = "verbose"
+		case 1:
+			levelStr = "info"
+		case 2:
+			levelStr = "warning"
+		case 3:
+			levelStr = "error"
+		case 4:
+			levelStr = "fatal"
+		default:
+			levelStr = "error"
+		}
+		env.Set("logLevel", levelStr)
+	}
+
 	createPromise := inferenceSession.Call("create", jsU8, options)
 	jsSess, err := Await(createPromise)
 	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "not supported") || strings.Contains(errStr, "Failed to find kernel") || strings.Contains(errStr, "incompatible") {
+			return nil, errors.Wrapf(compute.ErrNotImplemented, "ort.InferenceSession.create failed: %s", errStr)
+		}
 		return nil, errors.Wrap(err, "ort.InferenceSession.create failed")
 	}
 

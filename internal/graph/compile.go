@@ -8,8 +8,6 @@ import (
 
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
-	"github.com/gomlx/compute/dtypes/bfloat16"
-	"github.com/gomlx/compute/dtypes/float16"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/proto"
@@ -23,6 +21,7 @@ type CompiledModel struct {
 	InputShapes  []shapes.Shape
 	OutputNames  []string
 	OutputShapes []shapes.Shape
+	UsedDTypes   map[dtypes.DType]bool
 }
 
 func ShapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
@@ -63,9 +62,9 @@ func DTypeToONNX(dt dtypes.DType) onnx.TensorProto_DataType {
 	case dtypes.Float64:
 		return onnx.TensorProto_DOUBLE
 	case dtypes.Float16:
-		return onnx.TensorProto_FLOAT
+		return onnx.TensorProto_FLOAT16
 	case dtypes.BFloat16:
-		return onnx.TensorProto_FLOAT
+		return onnx.TensorProto_BFLOAT16
 	case dtypes.Int32:
 		return onnx.TensorProto_INT32
 	case dtypes.Int64:
@@ -89,41 +88,9 @@ func DTypeToONNX(dt dtypes.DType) onnx.TensorProto_DataType {
 	}
 }
 
-func float16ToFloat32(src []float16.Float16) []float32 {
-	dst := make([]float32, len(src))
-	for i, v := range src {
-		dst[i] = v.Float32()
-	}
-	return dst
-}
-
-func bfloat16ToFloat32(src []bfloat16.BFloat16) []float32 {
-	dst := make([]float32, len(src))
-	for i, v := range src {
-		dst[i] = v.Float32()
-	}
-	return dst
-}
-
 func constantToTensorProto(name string, shape shapes.Shape, flat any) *onnx.TensorProto {
-	var rawBytes []byte
-	var dt onnx.TensorProto_DataType
-
-	switch shape.DType {
-	case dtypes.Float16:
-		f16Slice := flat.([]float16.Float16)
-		f32Slice := float16ToFloat32(f16Slice)
-		rawBytes = dtypes.UnsafeByteSlice(f32Slice)
-		dt = onnx.TensorProto_FLOAT
-	case dtypes.BFloat16:
-		bf16Slice := flat.([]bfloat16.BFloat16)
-		f32Slice := bfloat16ToFloat32(bf16Slice)
-		rawBytes = dtypes.UnsafeByteSlice(f32Slice)
-		dt = onnx.TensorProto_FLOAT
-	default:
-		rawBytes = dtypes.UnsafeByteSliceFromAny(flat)
-		dt = DTypeToONNX(shape.DType)
-	}
+	rawBytes := dtypes.UnsafeByteSliceFromAny(flat)
+	dt := DTypeToONNX(shape.DType)
 
 	dims := make([]int64, len(shape.Dimensions))
 	for i, d := range shape.Dimensions {
@@ -307,6 +274,13 @@ func CompileToProto(b *Builder) (*CompiledModel, error) {
 	}
 	runtime.GC()
 
+	usedDTypes := make(map[dtypes.DType]bool)
+	for _, n := range sortedNodes {
+		if n.shape.DType != dtypes.InvalidDType {
+			usedDTypes[n.shape.DType] = true
+		}
+	}
+
 	return &CompiledModel{
 		Model:        model,
 		ModelBytes:   modelBytes,
@@ -314,5 +288,6 @@ func CompileToProto(b *Builder) (*CompiledModel, error) {
 		InputShapes:  inputShapes,
 		OutputNames:  outputNames,
 		OutputShapes: outputShapes,
+		UsedDTypes:   usedDTypes,
 	}, nil
 }

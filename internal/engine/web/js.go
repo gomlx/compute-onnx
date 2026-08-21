@@ -106,10 +106,26 @@ func GetWebGPUDevice() (js.Value, error) {
 	if err != nil || adapter.IsUndefined() || adapter.IsNull() {
 		return js.Undefined(), errors.Wrap(err, "failed to get WebGPU adapter")
 	}
-	devicePromise := adapter.Call("requestDevice")
-	device, err := Await(devicePromise)
-	if err != nil || device.IsUndefined() || device.IsNull() {
-		return js.Undefined(), errors.Wrap(err, "failed to get WebGPU device")
+
+	// Attempt requesting shader-f16 feature if supported by adapter
+	var device js.Value
+	features := adapter.Get("features")
+	hasF16 := !features.IsUndefined() && !features.IsNull() && features.Call("has", "shader-f16").Bool()
+	if hasF16 {
+		reqDesc := global.Get("Object").New()
+		reqFeatures := global.Get("Array").New()
+		reqFeatures.Call("push", "shader-f16")
+		reqDesc.Set("requiredFeatures", reqFeatures)
+		devicePromise := adapter.Call("requestDevice", reqDesc)
+		device, _ = Await(devicePromise)
+	}
+
+	if device.IsUndefined() || device.IsNull() {
+		devicePromise := adapter.Call("requestDevice")
+		device, err = Await(devicePromise)
+		if err != nil || device.IsUndefined() || device.IsNull() {
+			return js.Undefined(), errors.Wrap(err, "failed to get WebGPU device")
+		}
 	}
 
 	// Register with ort.env.webgpu.device so ORT reuses this same device
@@ -125,6 +141,19 @@ func GetWebGPUDevice() (js.Value, error) {
 		}
 	}
 	return device, nil
+}
+
+// HasWebGPUFloat16 checks if WebGPU is available and the GPUDevice supports shader-f16.
+func HasWebGPUFloat16() bool {
+	dev, err := GetWebGPUDevice()
+	if err != nil || dev.IsUndefined() || dev.IsNull() {
+		return false
+	}
+	features := dev.Get("features")
+	if features.IsUndefined() || features.IsNull() {
+		return false
+	}
+	return features.Call("has", "shader-f16").Bool()
 }
 
 // HasWebNN checks if the WebNN API (navigator.ml) is present and available in the browser.
@@ -153,7 +182,7 @@ func EnsureORTLoaded() error {
 	}
 
 	script := doc.Call("createElement", "script")
-	script.Set("src", "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js")
+	script.Set("src", "https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/ort.min.js")
 
 	loadedCh := make(chan error, 1)
 	var onload, onerror js.Func
@@ -185,21 +214,51 @@ func EnsureORTLoaded() error {
 		return errors.New("timed out waiting for onnxruntime-web script to load")
 	}
 
-	// Configure wasm paths
+	// Configure wasm paths and default logLevel
 	ortVal = global.Get("ort")
 	if ortVal.IsUndefined() || ortVal.IsNull() {
 		return errors.New("window.ort is still undefined after script load")
 	}
 	env := ortVal.Get("env")
 	if !env.IsUndefined() && !env.IsNull() {
+		env.Set("logLevel", "error")
 		wasmEnv := env.Get("wasm")
 		if !wasmEnv.IsUndefined() && !wasmEnv.IsNull() {
-			wasmEnv.Set("wasmPaths", "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/")
+			wasmEnv.Set("wasmPaths", "https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/")
 			wasmEnv.Set("numThreads", 1) // 1 thread by default for browser wasm stability
 		}
 	}
 
 	return nil
+}
+
+const DefaultORTWebVersion = ""
+
+// GetVersion returns the onnxruntime-web version string from window.ort.env.versions.web (or fallback).
+func GetVersion() string {
+	global := js.Global()
+	ortVal := global.Get("ort")
+	if !ortVal.IsUndefined() && !ortVal.IsNull() {
+		env := ortVal.Get("env")
+		if !env.IsUndefined() && !env.IsNull() {
+			versions := env.Get("versions")
+			if !versions.IsUndefined() && !versions.IsNull() {
+				webVer := versions.Get("web")
+				if !webVer.IsUndefined() && !webVer.IsNull() && webVer.String() != "" && webVer.String() != "undefined" {
+					return webVer.String()
+				}
+				commonVer := versions.Get("common")
+				if !commonVer.IsUndefined() && !commonVer.IsNull() && commonVer.String() != "" && commonVer.String() != "undefined" {
+					return commonVer.String()
+				}
+			}
+		}
+		ver := ortVal.Get("version")
+		if !ver.IsUndefined() && !ver.IsNull() && ver.String() != "" && ver.String() != "undefined" {
+			return ver.String()
+		}
+	}
+	return DefaultORTWebVersion
 }
 
 // ConvertSliceToTypedArray creates a JS TypedArray from a Go flat slice using fast CopyBytesToJS.
@@ -321,14 +380,10 @@ func ConvertSliceToTypedArray(flat any, dtype dtypes.DType) (js.Value, error) {
 		if !ok {
 			return js.Undefined(), errors.Errorf("expected []float16.Float16, got %T", flat)
 		}
-		f32 := make([]float32, len(s))
-		for i, v := range s {
-			f32[i] = v.Float32()
-		}
-		u8 := unsafeSliceBytes(f32)
+		u8 := unsafeSliceBytes(s)
 		jsU8 := global.Get("Uint8Array").New(len(u8))
 		js.CopyBytesToJS(jsU8, u8)
-		return global.Get("Float32Array").New(jsU8.Get("buffer"), jsU8.Get("byteOffset"), len(f32)), nil
+		return global.Get("Uint16Array").New(jsU8.Get("buffer"), jsU8.Get("byteOffset"), len(s)), nil
 
 	case dtypes.BFloat16:
 		s, ok := flat.([]bfloat16.BFloat16)
@@ -465,12 +520,8 @@ func CopyTypedArrayToSlice(srcTypedArray js.Value, flat any, dtype dtypes.DType)
 		if !ok {
 			return errors.Errorf("expected []float16.Float16, got %T", flat)
 		}
-		f32 := make([]float32, len(dst))
-		u8 := unsafeSliceBytes(f32)
+		u8 := unsafeSliceBytes(dst)
 		js.CopyBytesToGo(u8, jsU8)
-		for i, v := range f32 {
-			dst[i] = float16.FromFloat32(v)
-		}
 		return nil
 
 	case dtypes.BFloat16:
@@ -516,7 +567,9 @@ func ORTTypeString(dtype dtypes.DType) (string, error) {
 		return "uint32", nil
 	case dtypes.Uint64:
 		return "uint64", nil
-	case dtypes.Float16, dtypes.BFloat16:
+	case dtypes.Float16:
+		return "float16", nil
+	case dtypes.BFloat16:
 		return "float32", nil
 	default:
 		return "", errors.Errorf("unsupported dtype %s for onnxruntime-web", dtype)

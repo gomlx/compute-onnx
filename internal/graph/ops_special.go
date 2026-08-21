@@ -250,6 +250,68 @@ func (f *Function) Slice(x compute.Value, start []int, limit []int, stride []int
 	return f.addNode(node), nil
 }
 
+func (f *Function) reverseForWebGPU(xNode *Node, axes []int) (compute.Value, error) {
+	// Use Gather on WebGPU to avoid WebGPU Slice clamping bug on negative step.
+	currentNode := xNode
+	for _, a := range axes {
+		effAxis := a
+		if effAxis < 0 {
+			effAxis += xNode.shape.Rank()
+		}
+		dim := xNode.shape.Dimensions[effAxis]
+		if dim <= 0 {
+			// Fallback to Slice for dynamic dimensions
+			startsConst, err := f.Constant([]int64{-1}, 1)
+			if err != nil {
+				return nil, err
+			}
+			endsConst, err := f.Constant([]int64{math.MinInt32}, 1)
+			if err != nil {
+				return nil, err
+			}
+			axesConst, err := f.Constant([]int64{int64(effAxis)}, 1)
+			if err != nil {
+				return nil, err
+			}
+			stepsConst, err := f.Constant([]int64{-1}, 1)
+			if err != nil {
+				return nil, err
+			}
+			node := &Node{
+				opType: "Slice",
+				inputs: []*Node{currentNode, startsConst.(*Node), endsConst.(*Node), axesConst.(*Node), stepsConst.(*Node)},
+				shape:  currentNode.shape,
+			}
+			currentNode = f.addNode(node)
+			continue
+		}
+
+		revIndices := make([]int64, dim)
+		for j := range dim {
+			revIndices[j] = int64(dim - 1 - j)
+		}
+		indicesConst, err := f.Constant(revIndices, dim)
+		if err != nil {
+			return nil, err
+		}
+
+		node := &Node{
+			opType: "Gather",
+			inputs: []*Node{currentNode, indicesConst.(*Node)},
+			shape:  currentNode.shape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "axis",
+					Type: onnx.AttributeProto_INT,
+					I:    int64(effAxis),
+				},
+			},
+		}
+		currentNode = f.addNode(node)
+	}
+	return currentNode, nil
+}
+
 func (f *Function) Reverse(x compute.Value, axes ...int) (compute.Value, error) {
 	xNode, ok := x.(*Node)
 	if !ok {
@@ -260,6 +322,11 @@ func (f *Function) Reverse(x compute.Value, axes ...int) (compute.Value, error) 
 		return xNode, nil
 	}
 
+	if f.isWebGPU() {
+		return f.reverseForWebGPU(xNode, axes)
+	}
+
+	// Standard Slice for other backends (CPU, CUDA, WASM CPU)
 	starts := make([]int64, len(axes))
 	ends := make([]int64, len(axes))
 	steps := make([]int64, len(axes))
@@ -805,4 +872,68 @@ func (f *Function) Iota(shape shapes.Shape, iotaAxis int) (compute.Value, error)
 	}
 
 	return f.BroadcastInDim(rangeVal, shape, []int{iotaAxis})
+}
+
+// Pad injects padding on the start, end, or interior of the given operand.
+func (f *Function) Pad(x, fillValue compute.Value, axesConfig ...compute.PadAxis) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("Pad: input must be a valid onnxruntime node")
+	}
+
+	outShape, err := shapeinference.Pad(xNode.shape, axesConfig...)
+	if err != nil {
+		return nil, err
+	}
+
+	rank := xNode.shape.Rank()
+	for _, cfg := range axesConfig {
+		if cfg.Interior != 0 {
+			return nil, errors.Wrap(compute.ErrNotImplemented, "interior padding is not supported by ONNX Pad")
+		}
+	}
+
+	padsList := make([]int64, 2*rank)
+	for i := range rank {
+		padBefore := 0
+		padAfter := 0
+		if i < len(axesConfig) {
+			padBefore = axesConfig[i].Start
+			padAfter = axesConfig[i].End
+		}
+		padsList[i] = int64(padBefore)
+		padsList[i+rank] = int64(padAfter)
+	}
+
+	padsConst, err := f.Constant(padsList, 2*rank)
+	if err != nil {
+		return nil, err
+	}
+
+	padScalar, ok := fillValue.(*Node)
+	if !ok {
+		return nil, errors.New("Pad: fillValue must be a valid onnxruntime node")
+	}
+	if padScalar.shape.Rank() != 0 {
+		var errReshape error
+		res, errReshape := f.Reshape(padScalar)
+		if errReshape != nil {
+			return nil, errReshape
+		}
+		padScalar = res.(*Node)
+	}
+
+	padNode := &Node{
+		opType: "Pad",
+		inputs: []*Node{xNode, padsConst.(*Node), padScalar},
+		shape:  outShape,
+		attributes: []*onnx.AttributeProto{
+			{
+				Name: "mode",
+				Type: onnx.AttributeProto_STRING,
+				S:    []byte("constant"),
+			},
+		},
+	}
+	return f.addNode(padNode), nil
 }

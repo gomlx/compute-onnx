@@ -236,8 +236,11 @@ func New(config string) (compute.Backend, error) {
 	}
 	return &Backend{
 		config:      config,
+		version:     ort.GetVersion(),
 		cuda:        cudaEnabled,
 		logSeverity: logSeverity,
+		hasFloat16:  true,
+		hasBFloat16: cudaEnabled,
 	}, nil
 }
 

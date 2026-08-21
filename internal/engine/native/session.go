@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gomlx/compute"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"github.com/pkg/errors"
 	"k8s.io/klog/v2"
@@ -60,6 +61,12 @@ func CreateSession(modelBytes []byte, inputNames []string, outputNames []string,
 			} else {
 				klog.Errorf("Failed to save failed model to %q ($%s): %+v", filePath, SaveOnFailureEnv, wErr)
 			}
+		}
+		errStr := err.Error()
+		if strings.Contains(errStr, "Type 'tensor(bfloat16)'") ||
+			strings.Contains(errStr, "not supported for type 'bfloat16'") ||
+			strings.Contains(errStr, "Could not find an implementation") {
+			return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support operation: %s", errStr)
 		}
 		return nil, WrapCUDAError(errors.Wrap(err, "failed to create ONNX Runtime session"))
 	}

@@ -37,9 +37,15 @@ Controls the verbosity of ONNX Runtime's internal logging:
 - `log=2`: **Info, Warnings, and Errors**.
 - `log=3`: **Verbose / Debug**.
 
-**Example:**
+### WebGPU Graph Capture (`graph_capture=true`)
+*(Optional, WebGPU only)* Enables WebGPU command buffer recording and replay (`enableGraphCapture: true` in ONNX Runtime Web).
+- When enabled, ONNX Runtime Web records the WebGPU shader execution sequence into a static command buffer to reduce JavaScript dispatch overhead for static models.
+- **Note:** In Chromium/Chrome, graph capture may require enabling the **"Unsafe WebGPU Support"** browser flag (`chrome://flags/#enable-unsafe-webgpu`). It is disabled by default.
+
+**Examples:**
 ```bash
 GOMLX_BACKEND="onnx:webgpu,log=1"
+GOMLX_BACKEND="onnx:webgpu,graph_capture=true"
 ```
 
 ---
@@ -50,8 +56,8 @@ There are three ways to make the ONNX Runtime Web JavaScript and WebAssembly bin
 
 ### Method 1: Automatic CDN Injection (Zero Configuration)
 If `window.ort` is not already loaded on the page when your Go WASM binary runs (for instance, during automated test runners like `wasmbrowsertest`), `compute-onnx` will automatically:
-1. Dynamically create and append a `<script>` tag loading `ort.min.js` from `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js`.
-2. Configure `ort.env.wasm.wasmPaths` to fetch the required `.wasm` engine modules from the CDN on demand.
+1. Dynamically create and append a `<script>` tag loading `ort.min.js` from `https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/ort.min.js`.
+2. Configure `ort.env.wasm.wasmPaths` to fetch the required `.wasm` engine modules from the CDN on demand (`https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/`).
 
 *Note: Requires internet access on the client machine.*
 
@@ -67,7 +73,7 @@ For standard web applications, include the official ORT Web script tag in your H
     <meta charset="utf-8"/>
     <title>GoMLX WASM App</title>
     <!-- 1. Load ONNX Runtime Web from CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/ort.min.js"></script>
 
     <!-- 2. Load Go WASM exec runtime -->
     <script src="wasm_exec.js"></script>
