@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gomlx/compute"
+	_ "github.com/gomlx/compute/gobackend"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 	"github.com/gomlx/compute/support/backendtest"

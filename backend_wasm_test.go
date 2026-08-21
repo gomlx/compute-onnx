@@ -6,6 +6,7 @@ package onnxbackend
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"syscall/js"
 	"testing"
@@ -17,10 +18,15 @@ import (
 
 func setup() {
 	fmt.Printf("Available backends (WASM): %q\n", compute.List())
+	backendName := os.Getenv("GOMLX_BACKEND")
 	var errNew error
-	backend, errNew = New("")
+	if backendName == "" {
+		backend, errNew = compute.New()
+	} else {
+		backend, errNew = compute.NewWithConfig(backendName)
+	}
 	if errNew != nil {
-		klog.Fatalf("Failed to create backend: %+v", errNew)
+		klog.Fatalf("Failed to create backend (%q): %+v", backendName, errNew)
 	}
 	fmt.Printf("Backend: %s, %s\n", backend.Name(), backend.Description())
 }
