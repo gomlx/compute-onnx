@@ -182,6 +182,8 @@ func parseConfig(config string) (cudaEnabled bool, logSeverity int, customLibPat
 				}
 				severity := max(3-level, 0)
 				logSeverity = severity
+			} else if key == "web_version" || key == "webversion" {
+				// Ignored on native desktop platform.
 			} else {
 				return false, 0, "", errors.Errorf("unknown config option: %q", key)
 			}

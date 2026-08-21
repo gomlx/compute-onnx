@@ -93,23 +93,27 @@ func TestParseConfigGraphCapture(t *testing.T) {
 		config             string
 		wantEP             string
 		wantGraphCapture   bool
+		wantWebVersion     string
 		wantErr            bool
 	}{
-		{config: "", wantEP: "webgpu", wantGraphCapture: false},
-		{config: "wasm", wantEP: "wasm", wantGraphCapture: false},
-		{config: "webgpu", wantEP: "webgpu", wantGraphCapture: false},
-		{config: "webgpu,graph_capture=true", wantEP: "webgpu", wantGraphCapture: true},
-		{config: "webgpu,graph_capture=1", wantEP: "webgpu", wantGraphCapture: true},
-		{config: "webgpu,graph_capture=false", wantEP: "webgpu", wantGraphCapture: false},
-		{config: "webgpu,graph_capture=0", wantEP: "webgpu", wantGraphCapture: false},
-		{config: "webgpu,graph_capture", wantEP: "webgpu", wantGraphCapture: true},
-		{config: "onnx:webgpu,graph_capture=true,log=2", wantEP: "webgpu", wantGraphCapture: true},
+		{config: "", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: ""},
+		{config: "wasm", wantEP: "wasm", wantGraphCapture: false, wantWebVersion: ""},
+		{config: "webgpu", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: ""},
+		{config: "webgpu,graph_capture=true", wantEP: "webgpu", wantGraphCapture: true, wantWebVersion: ""},
+		{config: "webgpu,graph_capture=1", wantEP: "webgpu", wantGraphCapture: true, wantWebVersion: ""},
+		{config: "webgpu,graph_capture=false", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: ""},
+		{config: "webgpu,graph_capture=0", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: ""},
+		{config: "webgpu,graph_capture", wantEP: "webgpu", wantGraphCapture: true, wantWebVersion: ""},
+		{config: "onnx:webgpu,graph_capture=true,log=2", wantEP: "webgpu", wantGraphCapture: true, wantWebVersion: ""},
+		{config: "wasm,web_version=1.27", wantEP: "wasm", wantGraphCapture: false, wantWebVersion: "1.27"},
+		{config: "webgpu,web_version=@latest", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: "@latest"},
+		{config: "webgpu,webversion=v1.27", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: "v1.27"},
 		{config: "webgpu,graph_capture=invalid_bool", wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.config, func(t *testing.T) {
-			ep, _, gc, err := parseConfig(tt.config)
+			ep, _, gc, wv, err := parseConfig(tt.config)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseConfig(%q) error = %v, wantErr %v", tt.config, err, tt.wantErr)
 			}
@@ -120,7 +124,32 @@ func TestParseConfigGraphCapture(t *testing.T) {
 				if gc != tt.wantGraphCapture {
 					t.Errorf("graphCapture = %v, want %v", gc, tt.wantGraphCapture)
 				}
+				if wv != tt.wantWebVersion {
+					t.Errorf("webVersion = %v, want %v", wv, tt.wantWebVersion)
+				}
 			}
 		})
+	}
+}
+
+func TestNormalizeORTWebVersion(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", "dev"},
+		{"@dev", "dev"},
+		{"dev", "dev"},
+		{"@latest", "latest"},
+		{"latest", "latest"},
+		{"1.27", "1.27"},
+		{"v1.27", "1.27"},
+		{"V1.27.0", "1.27.0"},
+	}
+	for _, tc := range cases {
+		got := web.NormalizeORTWebVersion(tc.in)
+		if got != tc.want {
+			t.Errorf("NormalizeORTWebVersion(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

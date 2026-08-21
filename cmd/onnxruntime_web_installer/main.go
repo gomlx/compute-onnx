@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	defaultVersion = "latest"
+	// defaultVersion = "latest"
+	defaultVersion = "dev"
 	cdnBaseURL     = "https://cdn.jsdelivr.net/npm/onnxruntime-web"
 )
 

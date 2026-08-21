@@ -19,8 +19,8 @@ type Session struct {
 }
 
 // CreateSession creates an onnxruntime-web InferenceSession from model bytes.
-func CreateSession(modelBytes []byte, executionProvider string, logSeverity int, enableGraphCapture bool) (*Session, error) {
-	if err := EnsureORTLoaded(); err != nil {
+func CreateSession(modelBytes []byte, executionProvider string, logSeverity int, enableGraphCapture bool, webVersion string) (*Session, error) {
+	if err := EnsureORTLoaded(webVersion, executionProvider); err != nil {
 		return nil, errors.Wrap(err, "failed to initialize onnxruntime-web")
 	}
 

@@ -34,6 +34,7 @@ type Backend struct {
 	version            string
 	cuda               bool
 	executionProvider  string
+	webVersion         string
 	logSeverity        int
 	enableGraphCapture bool
 	hasFloat16         bool
@@ -62,6 +63,11 @@ func (b *Backend) LogSeverity() int {
 // ExecutionProvider returns the execution provider configured for the backend (e.g. "webgpu", "wasm", "cuda", or "").
 func (b *Backend) ExecutionProvider() string {
 	return b.executionProvider
+}
+
+// WebVersion returns the configured web version string (e.g. "dev", "@latest", "1.27", or "").
+func (b *Backend) WebVersion() string {
+	return b.webVersion
 }
 
 var _ compute.Backend = (*Backend)(nil)

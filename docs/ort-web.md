@@ -37,6 +37,9 @@ Controls the verbosity of ONNX Runtime's internal logging:
 - `log=2`: **Info, Warnings, and Errors**.
 - `log=3`: **Verbose / Debug**.
 
+### Web Version (`web_version=<version>`)
+*(Optional, Web only)* Specifies the onnxruntime-web npm version or tag used when loading from the CDN (e.g., `web_version=dev`, `web_version=1.27`, `web_version=v1.27`, `web_version=@latest`). Defaults to `dev`.
+
 ### WebGPU Graph Capture (`graph_capture=true`)
 *(Optional, WebGPU only)* Enables WebGPU command buffer recording and replay (`enableGraphCapture: true` in ONNX Runtime Web).
 - When enabled, ONNX Runtime Web records the WebGPU shader execution sequence into a static command buffer to reduce JavaScript dispatch overhead for static models.
@@ -46,6 +49,7 @@ Controls the verbosity of ONNX Runtime's internal logging:
 ```bash
 GOMLX_BACKEND="onnx:webgpu,log=1"
 GOMLX_BACKEND="onnx:webgpu,graph_capture=true"
+GOMLX_BACKEND="onnx:wasm,web_version=1.27"
 ```
 
 ---
@@ -56,8 +60,8 @@ There are three ways to make the ONNX Runtime Web JavaScript and WebAssembly bin
 
 ### Method 1: Automatic CDN Injection (Zero Configuration)
 If `window.ort` is not already loaded on the page when your Go WASM binary runs (for instance, during automated test runners like `wasmbrowsertest`), `compute-onnx` will automatically:
-1. Dynamically create and append a `<script>` tag loading `ort.min.js` from `https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/ort.min.js`.
-2. Configure `ort.env.wasm.wasmPaths` to fetch the required `.wasm` engine modules from the CDN on demand (`https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/`).
+1. Dynamically create and append a `<script>` tag loading `ort.min.js` (or `ort.webgpu.min.js` for WebGPU) from `https://cdn.jsdelivr.net/npm/onnxruntime-web@<web_version>/dist/`.
+2. Configure `ort.env.wasm.wasmPaths` to fetch the required `.wasm` engine modules from the CDN on demand (`https://cdn.jsdelivr.net/npm/onnxruntime-web@<web_version>/dist/`).
 
 *Note: Requires internet access on the client machine.*
 
