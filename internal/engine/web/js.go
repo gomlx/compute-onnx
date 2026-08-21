@@ -204,9 +204,6 @@ func EnsureORTLoaded(version string, executionProvider string) error {
 
 	normVersion := NormalizeORTWebVersion(version)
 	scriptFile := "ort.min.js"
-	if executionProvider == "webgpu" {
-		scriptFile = "ort.webgpu.min.js"
-	}
 
 	scriptSrc := fmt.Sprintf("https://cdn.jsdelivr.net/npm/onnxruntime-web@%s/dist/%s", normVersion, scriptFile)
 	wasmBasePath := fmt.Sprintf("https://cdn.jsdelivr.net/npm/onnxruntime-web@%s/dist/", normVersion)
