@@ -83,7 +83,7 @@ func TestWebNNPresenceCheck(t *testing.T) {
 	}
 	defer b.Finalize()
 
-	if b.Description() != "ONNX Runtime Web (webnn) compute backend for GoMLX" {
+	if !strings.HasPrefix(b.Description(), "ONNX Runtime Web") || !strings.HasSuffix(b.Description(), "(webnn) compute backend for GoMLX") {
 		t.Errorf("unexpected description: %s", b.Description())
 	}
 }

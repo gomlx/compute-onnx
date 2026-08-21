@@ -231,13 +231,27 @@ func EnsureORTLoaded() error {
 	return nil
 }
 
-const DefaultORTWebVersion = "latest"
+const DefaultORTWebVersion = ""
 
-// GetVersion returns the onnxruntime-web version string from window.ort.version (or default configured version).
+// GetVersion returns the onnxruntime-web version string from window.ort.env.versions.web (or fallback).
 func GetVersion() string {
 	global := js.Global()
 	ortVal := global.Get("ort")
 	if !ortVal.IsUndefined() && !ortVal.IsNull() {
+		env := ortVal.Get("env")
+		if !env.IsUndefined() && !env.IsNull() {
+			versions := env.Get("versions")
+			if !versions.IsUndefined() && !versions.IsNull() {
+				webVer := versions.Get("web")
+				if !webVer.IsUndefined() && !webVer.IsNull() && webVer.String() != "" && webVer.String() != "undefined" {
+					return webVer.String()
+				}
+				commonVer := versions.Get("common")
+				if !commonVer.IsUndefined() && !commonVer.IsNull() && commonVer.String() != "" && commonVer.String() != "undefined" {
+					return commonVer.String()
+				}
+			}
+		}
 		ver := ortVal.Get("version")
 		if !ver.IsUndefined() && !ver.IsNull() && ver.String() != "" && ver.String() != "undefined" {
 			return ver.String()
