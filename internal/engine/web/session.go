@@ -17,7 +17,7 @@ type Session struct {
 }
 
 // CreateSession creates an onnxruntime-web InferenceSession from model bytes.
-func CreateSession(modelBytes []byte, executionProvider string, logSeverity int) (*Session, error) {
+func CreateSession(modelBytes []byte, executionProvider string, logSeverity int, enableGraphCapture bool) (*Session, error) {
 	if err := EnsureORTLoaded(); err != nil {
 		return nil, errors.Wrap(err, "failed to initialize onnxruntime-web")
 	}
@@ -46,6 +46,9 @@ func CreateSession(modelBytes []byte, executionProvider string, logSeverity int)
 		eps.Call("push", "wasm")
 	}
 	options.Set("executionProviders", eps)
+	if enableGraphCapture && executionProvider == "webgpu" {
+		options.Set("enableGraphCapture", true)
+	}
 
 	logSev := logSeverity
 	if logSev < 0 {

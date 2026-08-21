@@ -37,9 +37,15 @@ Controls the verbosity of ONNX Runtime's internal logging:
 - `log=2`: **Info, Warnings, and Errors**.
 - `log=3`: **Verbose / Debug**.
 
-**Example:**
+### WebGPU Graph Capture (`graph_capture=true`)
+*(Optional, WebGPU only)* Enables WebGPU command buffer recording and replay (`enableGraphCapture: true` in ONNX Runtime Web).
+- When enabled, ONNX Runtime Web records the WebGPU shader execution sequence into a static command buffer to reduce JavaScript dispatch overhead for static models.
+- **Note:** In Chromium/Chrome, graph capture may require enabling the **"Unsafe WebGPU Support"** browser flag (`chrome://flags/#enable-unsafe-webgpu`). It is disabled by default.
+
+**Examples:**
 ```bash
 GOMLX_BACKEND="onnx:webgpu,log=1"
+GOMLX_BACKEND="onnx:webgpu,graph_capture=true"
 ```
 
 ---

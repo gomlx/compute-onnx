@@ -31,12 +31,13 @@ func MakeScalar[T gotype.NumericNotComplex](f *graph.Function, value T, dtype dt
 
 // Backend represents an ONNX Runtime backed [compute.Backend].
 type Backend struct {
-	config            string
-	cuda              bool
-	executionProvider string
-	logSeverity       int
-	isFinalized       bool
-	keepModelProto    bool
+	config             string
+	cuda               bool
+	executionProvider  string
+	logSeverity        int
+	enableGraphCapture bool
+	isFinalized        bool
+	keepModelProto     bool
 }
 
 // SetKeepModelProto controls whether compiled Executable instances retain the graph *onnx.ModelProto.
