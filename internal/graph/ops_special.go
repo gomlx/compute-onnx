@@ -873,3 +873,67 @@ func (f *Function) Iota(shape shapes.Shape, iotaAxis int) (compute.Value, error)
 
 	return f.BroadcastInDim(rangeVal, shape, []int{iotaAxis})
 }
+
+// Pad injects padding on the start, end, or interior of the given operand.
+func (f *Function) Pad(x, fillValue compute.Value, axesConfig ...compute.PadAxis) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("Pad: input must be a valid onnxruntime node")
+	}
+
+	outShape, err := shapeinference.Pad(xNode.shape, axesConfig...)
+	if err != nil {
+		return nil, err
+	}
+
+	rank := xNode.shape.Rank()
+	for _, cfg := range axesConfig {
+		if cfg.Interior != 0 {
+			return nil, errors.Wrap(compute.ErrNotImplemented, "interior padding is not supported by ONNX Pad")
+		}
+	}
+
+	padsList := make([]int64, 2*rank)
+	for i := range rank {
+		padBefore := 0
+		padAfter := 0
+		if i < len(axesConfig) {
+			padBefore = axesConfig[i].Start
+			padAfter = axesConfig[i].End
+		}
+		padsList[i] = int64(padBefore)
+		padsList[i+rank] = int64(padAfter)
+	}
+
+	padsConst, err := f.Constant(padsList, 2*rank)
+	if err != nil {
+		return nil, err
+	}
+
+	padScalar, ok := fillValue.(*Node)
+	if !ok {
+		return nil, errors.New("Pad: fillValue must be a valid onnxruntime node")
+	}
+	if padScalar.shape.Rank() != 0 {
+		var errReshape error
+		res, errReshape := f.Reshape(padScalar)
+		if errReshape != nil {
+			return nil, errReshape
+		}
+		padScalar = res.(*Node)
+	}
+
+	padNode := &Node{
+		opType: "Pad",
+		inputs: []*Node{xNode, padsConst.(*Node), padScalar},
+		shape:  outShape,
+		attributes: []*onnx.AttributeProto{
+			{
+				Name: "mode",
+				Type: onnx.AttributeProto_STRING,
+				S:    []byte("constant"),
+			},
+		},
+	}
+	return f.addNode(padNode), nil
+}
