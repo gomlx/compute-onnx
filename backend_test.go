@@ -10,6 +10,8 @@ import (
 	"github.com/gomlx/compute"
 	_ "github.com/gomlx/compute/gobackend"
 	"github.com/gomlx/compute/dtypes"
+	"github.com/gomlx/compute/dtypes/bfloat16"
+	"github.com/gomlx/compute/dtypes/float16"
 	"github.com/gomlx/compute/shapes"
 	"github.com/gomlx/compute/support/backendtest"
 	"github.com/gomlx/compute/support/testutil"
@@ -134,5 +136,42 @@ func TestMakeScalar(t *testing.T) {
 	}
 	if gotInt != int64(100) {
 		t.Errorf("Expected int64(100), got %v", gotInt)
+	}
+
+	// Test Float16 directly with float16.Float16 (if supported by backend)
+	if b.Capabilities().DTypes[dtypes.Float16] {
+		gotF16, err := testutil.Exec1(b, nil, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+			return MakeScalar(f.(*Function), float16.FromFloat32(3.5), dtypes.Float16)
+		})
+		if err != nil {
+			t.Fatalf("MakeScalar Float16 from float16.Float16 failed: %+v", err)
+		}
+		if gotF16 != float16.FromFloat32(3.5) {
+			t.Errorf("Expected float16(3.5), got %v", gotF16)
+		}
+
+		// Test Float16 from float32/float64 number
+		gotF16FromFloat, err := testutil.Exec1(b, nil, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+			return MakeScalar(f.(*Function), 3.5, dtypes.Float16)
+		})
+		if err != nil {
+			t.Fatalf("MakeScalar Float16 from float failed: %+v", err)
+		}
+		if gotF16FromFloat != float16.FromFloat32(3.5) {
+			t.Errorf("Expected float16(3.5), got %v", gotF16FromFloat)
+		}
+	}
+
+	// Test BFloat16 directly with bfloat16.BFloat16 (if supported by backend)
+	if b.Capabilities().DTypes[dtypes.BFloat16] {
+		gotBF16, err := testutil.Exec1(b, nil, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+			return MakeScalar(f.(*Function), bfloat16.FromFloat32(2.5), dtypes.BFloat16)
+		})
+		if err != nil {
+			t.Fatalf("MakeScalar BFloat16 from bfloat16.BFloat16 failed: %+v", err)
+		}
+		if gotBF16 != bfloat16.FromFloat32(2.5) {
+			t.Errorf("Expected bfloat16(2.5), got %v", gotBF16)
+		}
 	}
 }

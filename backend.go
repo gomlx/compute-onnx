@@ -11,7 +11,6 @@ import (
 	"github.com/gomlx/compute-onnx/internal/graph"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
-	"github.com/gomlx/compute/dtypes/gotype"
 	"github.com/pkg/errors"
 )
 
@@ -25,7 +24,7 @@ type Function = graph.Function
 type Node = graph.Node
 
 // MakeScalar constructs a 0D scalar constant tensor in the given function.
-func MakeScalar[T gotype.NumericNotComplex](f *graph.Function, value T, dtype dtypes.DType) (compute.Value, error) {
+func MakeScalar(f *graph.Function, value any, dtype dtypes.DType) (compute.Value, error) {
 	return graph.MakeScalar(f, value, dtype)
 }
 
