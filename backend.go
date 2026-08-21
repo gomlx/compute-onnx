@@ -37,6 +37,7 @@ type Backend struct {
 	webVersion         string
 	logSeverity        int
 	enableGraphCapture bool
+	hasFloat64         bool
 	hasFloat16         bool
 	hasBFloat16        bool
 	isFinalized        bool
@@ -151,7 +152,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		DynamicAxes:                 true,
 	}
 	caps.DTypes[dtypes.Float32] = true
-	caps.DTypes[dtypes.Float64] = true
+	caps.DTypes[dtypes.Float64] = b.hasFloat64
 	caps.DTypes[dtypes.Float16] = b.hasFloat16
 	caps.DTypes[dtypes.BFloat16] = b.hasBFloat16
 	caps.DTypes[dtypes.Int32] = true

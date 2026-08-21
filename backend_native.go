@@ -241,6 +241,7 @@ func New(config string) (compute.Backend, error) {
 		version:     ort.GetVersion(),
 		cuda:        cudaEnabled,
 		logSeverity: logSeverity,
+		hasFloat64:  true,
 		hasFloat16:  true,
 		hasBFloat16: cudaEnabled,
 	}, nil

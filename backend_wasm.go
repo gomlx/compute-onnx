@@ -116,10 +116,13 @@ func New(config string) (compute.Backend, error) {
 	}
 
 	hasFloat16 := false
+	hasFloat64 := false
 	if ep == "webgpu" {
 		hasFloat16 = web.HasWebGPUFloat16()
+		hasFloat64 = false // WebGPU WGSL does not support 64-bit float (f64)
 	} else if ep == "wasm" || ep == "" {
 		hasFloat16 = true // ORT Web WebAssembly CPU runtime supports float16 models
+		hasFloat64 = true // WASM CPU supports float64
 	}
 
 	return &Backend{
@@ -129,6 +132,7 @@ func New(config string) (compute.Backend, error) {
 		webVersion:         webVersion,
 		logSeverity:        logSeverity,
 		enableGraphCapture: enableGraphCapture,
+		hasFloat64:         hasFloat64,
 		hasFloat16:         hasFloat16,
 		hasBFloat16:        false,
 	}, nil
