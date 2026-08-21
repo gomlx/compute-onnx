@@ -137,16 +137,21 @@ func (f *Function) FusedSoftmax(x compute.Value, axis int) (compute.Value, error
 	return f.addNode(node), nil
 }
 
-// FusedGelu computes Gaussian Error Linear Unit activation using ONNX Gelu (opset 20+).
+// FusedGelu computes Gaussian Error Linear Unit activation using ONNX Gelu (opset 20+) or FastGelu (com.microsoft).
 func (f *Function) FusedGelu(x compute.Value, exact bool) (compute.Value, error) {
 	xNode, ok := x.(*Node)
 	if !ok {
 		return nil, errors.New("FusedGelu: input must be a valid onnxruntime node")
 	}
 
-	approxStr := "none"
 	if !exact {
-		approxStr = "tanh"
+		node := &Node{
+			domain: "com.microsoft",
+			opType: "FastGelu",
+			inputs: []*Node{xNode},
+			shape:  xNode.shape,
+		}
+		return f.addNode(node), nil
 	}
 
 	node := &Node{
@@ -157,7 +162,7 @@ func (f *Function) FusedGelu(x compute.Value, exact bool) (compute.Value, error)
 			{
 				Name: "approximate",
 				Type: onnx.AttributeProto_STRING,
-				S:    []byte(approxStr),
+				S:    []byte("none"),
 			},
 		},
 	}
