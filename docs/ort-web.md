@@ -18,8 +18,8 @@ Supported execution providers:
 
 | Provider | Config Options | Description |
 | :--- | :--- | :--- |
-| **WebGPU** | `onnx:webgpu`, `onnx:gpu` | Executes computation kernels via client GPU shaders using WebGPU. Best for large models and parallel batches. |
-| **WASM (CPU)** | `onnx:wasm`, `onnx:cpu` | Executes via CPU WebAssembly using SIMD instructions. Low latency for small models and single-sample inference. |
+| **WebGPU** | `onnx:webgpu`, `onnx:gpu` | Executes computation kernels via client GPU shaders using WebGPU. Best for large models and parallel batches. *(Note: WebGPU shaders only support `Float32`, `Float16`, `Int32`, `Uint32`; `Float64` operations are supported via automatic fallback to the CPU WebAssembly runtime).* |
+| **WASM (CPU)** | `onnx:wasm`, `onnx:cpu` | Executes via CPU WebAssembly using SIMD instructions. Low latency for small models and single-sample inference. Supports full float64 operations. |
 | **WebNN** | `onnx:webnn` | Executes using browser Web Neural Network hardware acceleration (NPU/GPU/CPU). Experimental in Chromium browsers. |
 | **WebGL** | `onnx:webgl` | Legacy GPU shader acceleration via WebGL. |
 | **Default** | `onnx` (or empty) | **Auto-detects**: Uses **WebGPU** if an active GPU adapter is available; otherwise automatically defaults to **WASM (CPU)**. |
@@ -222,6 +222,11 @@ Because of this architectural pipeline, **every single `Execute()` call on WebGP
 * **Batching on WebGPU**:
   - If you must use WebGPU for search trees or iterative inference, **batch multiple inputs (e.g. 32–128 items) into a single execution call**. The WebGPU dispatch overhead remains ~2ms whether evaluating 1 item or 100 items, multiplying effective throughput.
 
-### 3. Automatic Input GPU Buffer Pre-allocation
+### 3. Precision Support & `Float64` Fallback
+- **`Float32` & Integers (`Int32`, `Uint32`)**: Fully accelerated on WebGPU shaders.
+- **`Float16`**: Supported on WebGPU when the underlying GPU and browser adapter expose the `shader-f16` feature.
+- **`Float64` (`float64`)**: The WebGPU / WGSL specification does not support 64-bit floating point precision. Graphs containing `Float64` operations automatically fall back and execute via the bundled CPU WebAssembly runtime (`wasm`).
+
+### 4. Automatic Input GPU Buffer Pre-allocation
 `compute-onnx` automatically pre-allocates static-shaped input `GPUBuffer` descriptors when creating WebGPU executables and streams dynamic inputs via WebGPU's bulk DMA `device.queue.writeBuffer(...)`. This eliminates per-step memory allocations and minimizes multi-input graph overhead.
 
