@@ -10,6 +10,7 @@ import (
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapeinference"
+	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
 
@@ -241,17 +242,34 @@ func (f *Function) ArgMinMax(x compute.Value, axis int, outputDType dtypes.DType
 		ortOpType = "ArgMin"
 	}
 
+	effInput := xNode
+	effAxis := axis
+	needsReshape := f.isWebGPU() && xNode.shape.Rank() == 1
+	var int64Shape shapes.Shape
+	if needsReshape {
+		// Reshape 1D [N] to 2D [1, N] to avoid WebGPU WGSL bug where rank-1 indices are scalar u32 and cannot be indexed.
+		reshapedIn, err := f.Reshape(xNode, 1, xNode.shape.Dimensions[0])
+		if err != nil {
+			return nil, err
+		}
+		effInput = reshapedIn.(*Node)
+		effAxis = 1
+		int64Shape = shapes.Make(dtypes.Int64, 1)
+	} else {
+		int64Shape = shapes.Make(dtypes.Int64, outShape.Dimensions...)
+	}
+
 	f.nodeCount++
 	argMinMaxNode := &Node{
 		name:   fmt.Sprintf("node_%d", f.nodeCount),
 		opType: ortOpType,
-		inputs: []*Node{xNode},
-		shape:  outShape,
+		inputs: []*Node{effInput},
+		shape:  int64Shape,
 		attributes: []*onnx.AttributeProto{
 			{
 				Name: "axis",
 				Type: onnx.AttributeProto_INT,
-				I:    int64(axis),
+				I:    int64(effAxis),
 			},
 			{
 				Name: "keepdims",
@@ -267,10 +285,19 @@ func (f *Function) ArgMinMax(x compute.Value, axis int, outputDType dtypes.DType
 	}
 	f.nodes = append(f.nodes, argMinMaxNode)
 
-	// ONNX ArgMin/ArgMax produces INT64 output. Convert to outputDType if needed.
-	if outputDType != dtypes.Int64 {
-		return f.ConvertDType(argMinMaxNode, outputDType)
+	var res compute.Value = argMinMaxNode
+	if needsReshape {
+		var errReshape error
+		res, errReshape = f.Reshape(argMinMaxNode)
+		if errReshape != nil {
+			return nil, errReshape
+		}
 	}
 
-	return argMinMaxNode, nil
+	// ONNX ArgMin/ArgMax produces INT64 output. Convert to outputDType if needed.
+	if outputDType != dtypes.Int64 {
+		return f.ConvertDType(res, outputDType)
+	}
+
+	return res, nil
 }
