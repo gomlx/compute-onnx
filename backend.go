@@ -54,6 +54,16 @@ func (b *Backend) KeepModelProto() bool {
 	return b.keepModelProto
 }
 
+// LogSeverity returns the configured log severity level (0=verbose, 1=info, 2=warning, 3=error, 4=fatal, or -1 if not set).
+func (b *Backend) LogSeverity() int {
+	return b.logSeverity
+}
+
+// ExecutionProvider returns the execution provider configured for the backend (e.g. "webgpu", "wasm", "cuda", or "").
+func (b *Backend) ExecutionProvider() string {
+	return b.executionProvider
+}
+
 var _ compute.Backend = (*Backend)(nil)
 var _ compute.DataInterface = (*Backend)(nil)
 
@@ -176,6 +186,7 @@ func (b *Backend) Builder(name string) compute.Builder {
 		return b.createExecutable(compiled.ModelBytes, compiled.InputNames, compiled.InputShapes, compiled.OutputNames, compiled.OutputShapes, compiled.Model)
 	})
 	gb.SetExecutionProvider(b.executionProvider)
+	gb.SetLogSeverity(b.logSeverity)
 	return gb
 }
 

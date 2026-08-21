@@ -17,6 +17,7 @@ type Builder struct {
 	notimplemented.Builder
 	name              string
 	executionProvider string
+	logSeverity       int
 	compileFn         CompilerFn
 	mainFn            *Function
 	funcs             map[string]*Function
@@ -32,9 +33,10 @@ func NewBuilder(name string, compileFn CompilerFn) *Builder {
 				return errors.Wrapf(compute.ErrNotImplemented, "%s (%d) not implemented for ONNX Runtime backend", op, op)
 			},
 		},
-		name:      name,
-		compileFn: compileFn,
-		funcs:     make(map[string]*Function),
+		name:        name,
+		logSeverity: -1,
+		compileFn:   compileFn,
+		funcs:       make(map[string]*Function),
 	}
 	b.mainFn = NewFunction(compute.MainName, b)
 	b.funcs[compute.MainName] = b.mainFn
@@ -67,6 +69,16 @@ func (b *Builder) ExecutionProvider() string {
 // IsWebGPU returns true if targeting the WebGPU execution provider.
 func (b *Builder) IsWebGPU() bool {
 	return b.executionProvider == "webgpu"
+}
+
+// SetLogSeverity sets the log severity level for the builder.
+func (b *Builder) SetLogSeverity(severity int) {
+	b.logSeverity = severity
+}
+
+// LogSeverity returns the log severity level for the builder.
+func (b *Builder) LogSeverity() int {
+	return b.logSeverity
 }
 
 // Functions returns all registered functions in the builder.

@@ -195,6 +195,13 @@ func (f *Function) isWebGPU() bool {
 	return f.builder != nil && f.builder.IsWebGPU()
 }
 
+func (f *Function) LogSeverity() int {
+	if f.builder != nil {
+		return f.builder.LogSeverity()
+	}
+	return -1
+}
+
 func (f *Function) Shape(v compute.Value) (shapes.Shape, error) {
 	node, ok := v.(*Node)
 	if !ok {
