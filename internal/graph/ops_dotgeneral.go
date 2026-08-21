@@ -10,6 +10,7 @@ import (
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapeinference"
+	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
 
@@ -145,7 +146,7 @@ func (f *Function) DotGeneral(
 		}
 	}
 
-	// 2. Optimization: Use standard MatMul for 2D or batched matrix multiplication when contracting last dim of LHS and second-to-last dim of RHS
+	// 2. Optimization: Use standard MatMul for matrix multiplication when contracting 1 axis.
 	var lastNode *Node
 	batchAxesMatch := true
 	if len(lhsBatchAxes) != len(rhsBatchAxes) {
@@ -158,20 +159,116 @@ func (f *Function) DotGeneral(
 			}
 		}
 	}
-	isStandardMatMul := batchAxesMatch && len(lhsContractingAxes) == 1 && lhsContractingAxes[0] == lhsRank-1 &&
-		len(rhsContractingAxes) == 1 && rhsContractingAxes[0] == rhsRank-2
-	if isStandardMatMul {
-		f.nodeCount++
-		matmulNode := &Node{
-			name:   fmt.Sprintf("node_%d", f.nodeCount),
-			opType: "MatMul",
-			inputs: []*Node{lhsInput, rhsInput},
-			shape:  outShape,
+
+	canUseMatMul := batchAxesMatch && len(lhsContractingAxes) == 1 && len(rhsContractingAxes) == 1
+
+	if canUseMatMul {
+		matLhs := lhsInput
+		matRhs := rhsInput
+		squeezeLhs := false
+		squeezeRhs := false
+
+		// If LHS is 2D and contracting axis is 0, transpose LHS to [1, 0]
+		if lhsRank == 2 && len(lhsBatchAxes) == 0 && lhsContractingAxes[0] == 0 {
+			transLhs, err := f.Transpose(matLhs, 1, 0)
+			if err != nil {
+				return nil, err
+			}
+			matLhs = transLhs.(*Node)
 		}
-		f.nodes = append(f.nodes, matmulNode)
-		lastNode = matmulNode
-	} else {
+		// If RHS is 2D and contracting axis is 1, transpose RHS to [1, 0]
+		if rhsRank == 2 && len(rhsBatchAxes) == 0 && rhsContractingAxes[0] == 1 {
+			transRhs, err := f.Transpose(matRhs, 1, 0)
+			if err != nil {
+				return nil, err
+			}
+			matRhs = transRhs.(*Node)
+		}
+
+		// Recheck contracting axes positions for general case
+		curLhsContract := lhsContractingAxes[0]
+		if lhsRank == 2 && len(lhsBatchAxes) == 0 && lhsContractingAxes[0] == 0 {
+			curLhsContract = 1
+		}
+		curRhsContract := rhsContractingAxes[0]
+		if rhsRank == 2 && len(rhsBatchAxes) == 0 && rhsContractingAxes[0] == 1 {
+			curRhsContract = 0
+		}
+
+		if curLhsContract != matLhs.shape.Rank()-1 || (matRhs.shape.Rank() > 1 && curRhsContract != matRhs.shape.Rank()-2) {
+			// Cannot simple transpose to MatMul, fallback to Einsum
+			canUseMatMul = false
+		} else {
+			// ONNX Runtime WebGPU strictly requires 2D+ tensors for MatMul kernels.
+			// If LHS is 1D [K], unsqueeze to [1, K]
+			if lhsRank == 1 {
+				matLhsVal, err := f.Reshape(lhsInput, 1, lhsInput.shape.Dimensions[0])
+				if err != nil {
+					return nil, err
+				}
+				matLhs = matLhsVal.(*Node)
+				squeezeLhs = true
+			}
+			// If RHS is 1D [K], unsqueeze to [K, 1]
+			if rhsRank == 1 {
+				matRhsVal, err := f.Reshape(rhsInput, rhsInput.shape.Dimensions[0], 1)
+				if err != nil {
+					return nil, err
+				}
+				matRhs = matRhsVal.(*Node)
+				squeezeRhs = true
+			}
+
+			// Calculate 2D matmul shape
+			matOutShape := outShape
+			if squeezeLhs || squeezeRhs {
+				matDims := make([]int, 0, len(outShape.Dimensions)+2)
+				for i := 0; i < lhsRank-1; i++ {
+					matDims = append(matDims, lhsInput.shape.Dimensions[i])
+				}
+				if squeezeLhs {
+					matDims = append(matDims, 1)
+				}
+				for i := 0; i < rhsRank; i++ {
+					if i != rhsContractingAxes[0] {
+						matDims = append(matDims, rhsInput.shape.Dimensions[i])
+					}
+				}
+				if squeezeRhs {
+					matDims = append(matDims, 1)
+				}
+				matOutShape = shapes.Make(accumulationDType, matDims...)
+			}
+
+			f.nodeCount++
+			matmulNode := &Node{
+				name:   fmt.Sprintf("node_%d", f.nodeCount),
+				opType: "MatMul",
+				inputs: []*Node{matLhs, matRhs},
+				shape:  matOutShape,
+			}
+			f.nodes = append(f.nodes, matmulNode)
+			lastNode = matmulNode
+
+			// If we unsqueezed LHS or RHS, reshape back to outShape
+			if squeezeLhs || squeezeRhs {
+				if !matOutShape.Equal(outShape) {
+					reshaped, err := f.Reshape(matmulNode, outShape.Dimensions...)
+					if err != nil {
+						return nil, err
+					}
+					lastNode = reshaped.(*Node)
+				}
+			}
+		}
+	}
+
+	if !canUseMatMul {
 		// 3. Fallback: Generate Einsum equation
+		if accumulationDType == dtypes.BFloat16 {
+			return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support BFloat16 for Einsum: standard ONNX Einsum schema (opset 21) does not support tensor(bfloat16)")
+		}
+
 		equation := fmt.Sprintf("%s,%s->%s",
 			strings.Join(lhsChars, ""),
 			strings.Join(rhsChars, ""),

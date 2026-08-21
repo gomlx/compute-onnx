@@ -5,8 +5,10 @@
 package web
 
 import (
+	"strings"
 	"syscall/js"
 
+	"github.com/gomlx/compute"
 	"github.com/pkg/errors"
 )
 
@@ -54,11 +56,13 @@ func CreateSession(modelBytes []byte, executionProvider string, logSeverity int,
 	if logSev < 0 {
 		logSev = 3 // ERROR by default
 	}
-	options.Set("logSeverityLevel", logSev)
-
 	createPromise := inferenceSession.Call("create", jsU8, options)
 	jsSess, err := Await(createPromise)
 	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "not supported") || strings.Contains(errStr, "Failed to find kernel") || strings.Contains(errStr, "incompatible") {
+			return nil, errors.Wrapf(compute.ErrNotImplemented, "ort.InferenceSession.create failed: %s", errStr)
+		}
 		return nil, errors.Wrap(err, "ort.InferenceSession.create failed")
 	}
 

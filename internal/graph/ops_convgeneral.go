@@ -35,6 +35,11 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 	rank := inputNode.shape.Rank()
 	numSpatial := rank - 2
 
+	// ONNX Conv operator does not support BFloat16 in standard ONNX Runtime schemas.
+	if inputNode.shape.DType == dtypes.BFloat16 {
+		return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support BFloat16 for Conv: standard ONNX Conv schema does not support tensor(bfloat16)")
+	}
+
 	// ONNX Conv operator does not natively support input dilations (atrous/upsampled inputs)
 	// or batch grouping (batchGroupCount > 1).
 	// Return compute.ErrNotImplemented directly (without wrapping) so testutil.SkipIfMissing can detect it.

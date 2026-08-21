@@ -65,8 +65,14 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 	var ortOpType string
 	switch opType {
 	case compute.OpTypeReduceMin:
+		if reduceInput.shape.DType == dtypes.BFloat16 {
+			return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support BFloat16 for ReduceMin: ONNX Runtime CPU/CUDA kernels do not support tensor(bfloat16) for ReduceMin")
+		}
 		ortOpType = "ReduceMin"
 	case compute.OpTypeReduceMax:
+		if reduceInput.shape.DType == dtypes.BFloat16 {
+			return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support BFloat16 for ReduceMax: ONNX Runtime CPU/CUDA kernels do not support tensor(bfloat16) for ReduceMax")
+		}
 		ortOpType = "ReduceMax"
 	case compute.OpTypeReduceSum:
 		ortOpType = "ReduceSum"

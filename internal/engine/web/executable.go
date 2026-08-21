@@ -86,7 +86,7 @@ func (e *Executable) initWebGPUStaticBuffers() {
 			continue
 		}
 		byteSize := sh.Size() * sh.DType.Size()
-		if byteSize == 0 {
+		if byteSize == 0 || byteSize%4 != 0 {
 			continue
 		}
 		// WebGPU buffer sizes must be aligned to 16 bytes for storage buffers
@@ -111,6 +111,11 @@ func (e *Executable) initWebGPUStaticBuffers() {
 			dimsArray.Call("push", d)
 		}
 		opts.Set("dims", dimsArray)
+
+		// ORT Web fromGpuBuffer supports float32, float16, int32, int64, uint32, bool (float64/bfloat16/uint64/int8/uint8/int16/uint16 are unsupported)
+		if sh.DType == dtypes.Float64 || sh.DType == dtypes.BFloat16 || sh.DType == dtypes.Uint64 || sh.DType == dtypes.Int8 || sh.DType == dtypes.Uint8 || sh.DType == dtypes.Int16 || sh.DType == dtypes.Uint16 {
+			continue
+		}
 
 		gpuTensor := tensorCtor.Call("fromGpuBuffer", gpuBuf, opts)
 		e.gpuInputTensors[i] = gpuTensor
@@ -192,7 +197,9 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 			}
 
 			// If WebGPU pre-allocated GPU buffer is available, upload directly via device.queue.writeBuffer
-			if e.isWebGPU && i < len(e.gpuInputBuffers) && !e.gpuInputBuffers[i].IsUndefined() && !e.gpuInputBuffers[i].IsNull() {
+			if e.isWebGPU && i < len(e.gpuInputBuffers) && !e.gpuInputBuffers[i].IsUndefined() && !e.gpuInputBuffers[i].IsNull() &&
+				i < len(e.gpuInputTensors) && !e.gpuInputTensors[i].IsUndefined() && !e.gpuInputTensors[i].IsNull() &&
+				buf.shape.Equal(e.inputShapes[i]) {
 				dataProp := buf.wrapper.jsTensor.Get("data")
 				if !dataProp.IsUndefined() && !dataProp.IsNull() {
 					queue := e.gpuDevice.Get("queue")

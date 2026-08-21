@@ -59,6 +59,10 @@ func (t *typedTensor[T]) GetDType() dtypes.DType {
 		return dtypes.Uint16
 	case uint32:
 		return dtypes.Uint32
+	case float16.Float16:
+		return dtypes.Float16
+	case bfloat16.BFloat16:
+		return dtypes.BFloat16
 	case uint64:
 		return dtypes.Uint64
 	}
@@ -206,19 +210,17 @@ func NewOrtTensorWrapper(shape shapes.Shape, flat any) (OrtTensorWrapper, error)
 	ortShape := ort.NewShape(toInt64s(shape.Dimensions)...)
 	switch f := flat.(type) {
 	case []float16.Float16:
-		f32 := float16ToFloat32(f)
-		t, err := ort.NewTensor(ortShape, f32)
+		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &float16Tensor{tensor: t}, nil
+		return &typedTensor[float16.Float16]{tensor: t, rawData: f}, nil
 	case []bfloat16.BFloat16:
-		f32 := bfloat16ToFloat32(f)
-		t, err := ort.NewTensor(ortShape, f32)
+		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
 			return nil, err
 		}
-		return &bfloat16Tensor{tensor: t}, nil
+		return &typedTensor[bfloat16.BFloat16]{tensor: t, rawData: f}, nil
 	case []float32:
 		t, err := ort.NewTensor(ortShape, f)
 		if err != nil {
@@ -295,17 +297,17 @@ func NewEmptyOrtTensorWrapper(shape shapes.Shape) (OrtTensorWrapper, error) {
 	ortShape := ort.NewShape(toInt64s(shape.Dimensions)...)
 	switch shape.DType {
 	case dtypes.Float16:
-		t, err := ort.NewEmptyTensor[float32](ortShape)
+		t, err := ort.NewEmptyTensor[float16.Float16](ortShape)
 		if err != nil {
 			return nil, err
 		}
-		return &float16Tensor{tensor: t}, nil
+		return &typedTensor[float16.Float16]{tensor: t}, nil
 	case dtypes.BFloat16:
-		t, err := ort.NewEmptyTensor[float32](ortShape)
+		t, err := ort.NewEmptyTensor[bfloat16.BFloat16](ortShape)
 		if err != nil {
 			return nil, err
 		}
-		return &bfloat16Tensor{tensor: t}, nil
+		return &typedTensor[bfloat16.BFloat16]{tensor: t}, nil
 	case dtypes.Float32:
 		t, err := ort.NewEmptyTensor[float32](ortShape)
 		if err != nil {
@@ -416,21 +418,9 @@ func (g *GpuTensorWrapper) ToFlatData(flat any) error {
 	}
 	switch f := flat.(type) {
 	case []float16.Float16:
-		f32 := make([]float32, len(f))
-		err := ort.CopyGPUToHost(g.val, unsafe.Pointer(&f32[0]), len(f32)*4)
-		if err != nil {
-			return err
-		}
-		float32ToFloat16(f32, f)
-		return nil
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*2)
 	case []bfloat16.BFloat16:
-		f32 := make([]float32, len(f))
-		err := ort.CopyGPUToHost(g.val, unsafe.Pointer(&f32[0]), len(f32)*4)
-		if err != nil {
-			return err
-		}
-		float32ToBFloat16(f32, f)
-		return nil
+		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*2)
 	case []float32:
 		return ort.CopyGPUToHost(g.val, unsafe.Pointer(&f[0]), len(f)*4)
 	case []float64:
@@ -464,11 +454,9 @@ func (g *GpuTensorWrapper) CopyFrom(flat any) error {
 	}
 	switch f := flat.(type) {
 	case []float16.Float16:
-		f32 := float16ToFloat32(f)
-		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f32[0]), len(f32)*4)
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*2)
 	case []bfloat16.BFloat16:
-		f32 := bfloat16ToFloat32(f)
-		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f32[0]), len(f32)*4)
+		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*2)
 	case []float32:
 		return ort.CopyHostToGPU(g.val, unsafe.Pointer(&f[0]), len(f)*4)
 	case []float64:
@@ -610,17 +598,17 @@ func (b *Buffer) Wrapper() OrtTensorWrapper {
 func WrapOrtValue(val ort.Value, shape shapes.Shape) (OrtTensorWrapper, error) {
 	switch shape.DType {
 	case dtypes.Float16:
-		t, ok := val.(*ort.Tensor[float32])
+		t, ok := val.(*ort.Tensor[float16.Float16])
 		if !ok {
-			return nil, errors.Errorf("expected *ort.Tensor[float32], got %T", val)
+			return nil, errors.Errorf("expected *ort.Tensor[float16.Float16], got %T", val)
 		}
-		return &float16Tensor{tensor: t}, nil
+		return &typedTensor[float16.Float16]{tensor: t}, nil
 	case dtypes.BFloat16:
-		t, ok := val.(*ort.Tensor[float32])
+		t, ok := val.(*ort.Tensor[bfloat16.BFloat16])
 		if !ok {
-			return nil, errors.Errorf("expected *ort.Tensor[float32], got %T", val)
+			return nil, errors.Errorf("expected *ort.Tensor[bfloat16.BFloat16], got %T", val)
 		}
-		return &bfloat16Tensor{tensor: t}, nil
+		return &typedTensor[bfloat16.BFloat16]{tensor: t}, nil
 	case dtypes.Float32:
 		t, ok := val.(*ort.Tensor[float32])
 		if !ok {

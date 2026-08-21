@@ -12,6 +12,12 @@ const OrtApi* GetOrtApi(void* get_api_base_ptr, uint32_t version) {
     return api_base->GetApi(version);
 }
 
+const char* GetOrtVersion(void* get_api_base_ptr) {
+    OrtGetApiBaseFn get_api_base = (OrtGetApiBaseFn)get_api_base_ptr;
+    const OrtApiBase* api_base = get_api_base();
+    return api_base->GetVersionString();
+}
+
 OrtStatus* wrapper_CreateEnv(const OrtApi* api, OrtLoggingLevel default_logging_level, const char* logid, OrtEnv** out) {
     return api->CreateEnv(default_logging_level, logid, out);
 }

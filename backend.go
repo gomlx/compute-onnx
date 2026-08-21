@@ -32,10 +32,13 @@ func MakeScalar[T gotype.NumericNotComplex](f *graph.Function, value T, dtype dt
 // Backend represents an ONNX Runtime backed [compute.Backend].
 type Backend struct {
 	config             string
+	version            string
 	cuda               bool
 	executionProvider  string
 	logSeverity        int
 	enableGraphCapture bool
+	hasFloat16         bool
+	hasBFloat16        bool
 	isFinalized        bool
 	keepModelProto     bool
 }
@@ -84,18 +87,31 @@ func (b *Backend) Name() string {
 	return BackendName
 }
 
+func (b *Backend) Config() string {
+	return b.config
+}
+
 func (b *Backend) String() string {
 	return b.Name()
 }
 
+// Version returns the version of the underlying ONNX Runtime engine.
+func (b *Backend) Version() string {
+	return b.version
+}
+
 func (b *Backend) Description() string {
+	verStr := ""
+	if b.version != "" {
+		verStr = fmt.Sprintf(" v%s", b.version)
+	}
 	if b.executionProvider != "" {
-		return fmt.Sprintf("ONNX Runtime Web (%s) compute backend for GoMLX", b.executionProvider)
+		return fmt.Sprintf("ONNX Runtime Web%s (%s) compute backend for GoMLX", verStr, b.executionProvider)
 	}
 	if b.cuda {
-		return "ONNX Runtime (CUDA GPU) compute backend for GoMLX"
+		return fmt.Sprintf("ONNX Runtime%s (CUDA GPU) compute backend for GoMLX", verStr)
 	}
-	return "ONNX Runtime (CPU) compute backend for GoMLX"
+	return fmt.Sprintf("ONNX Runtime%s (CPU) compute backend for GoMLX", verStr)
 }
 
 func (b *Backend) NumDevices() int {
@@ -121,8 +137,8 @@ func (b *Backend) Capabilities() compute.Capabilities {
 	}
 	caps.DTypes[dtypes.Float32] = true
 	caps.DTypes[dtypes.Float64] = true
-	caps.DTypes[dtypes.Float16] = true
-	caps.DTypes[dtypes.BFloat16] = true
+	caps.DTypes[dtypes.Float16] = b.hasFloat16
+	caps.DTypes[dtypes.BFloat16] = b.hasBFloat16
 	caps.DTypes[dtypes.Int32] = true
 	caps.DTypes[dtypes.Int64] = true
 	caps.DTypes[dtypes.Bool] = true
@@ -149,6 +165,15 @@ func (b *Backend) Builder(name string) compute.Builder {
 		if err != nil {
 			return nil, err
 		}
+
+		// Validate all used dtypes are supported by this backend
+		caps := b.Capabilities()
+		for dt := range compiled.UsedDTypes {
+			if !caps.DTypes[dt] {
+				return nil, errors.Wrapf(compute.ErrNotImplemented, "dtype %s is not supported by %s", dt, b.Description())
+			}
+		}
+
 		return b.createExecutable(compiled.ModelBytes, compiled.InputNames, compiled.InputShapes, compiled.OutputNames, compiled.OutputShapes, compiled.Model)
 	})
 }

@@ -7,6 +7,7 @@ package ort
 
 // Forward declarations of our wrappers:
 const OrtApi* GetOrtApi(void* get_api_base_ptr, uint32_t version);
+const char* GetOrtVersion(void* get_api_base_ptr);
 
 OrtStatus* wrapper_CreateEnv(const OrtApi* api, OrtLoggingLevel default_logging_level, const char* logid, OrtEnv** out);
 void wrapper_ReleaseEnv(const OrtApi* api, OrtEnv* env);
@@ -77,10 +78,14 @@ import (
 	"runtime"
 	"sync"
 	"unsafe"
+
+	"github.com/gomlx/compute/dtypes/bfloat16"
+	"github.com/gomlx/compute/dtypes/float16"
 )
 
 var (
 	ortLibPath string
+	ortVersion string
 	ortApi     *C.OrtApi
 	ortHandle  unsafe.Pointer
 	ortEnv     *Env
@@ -88,6 +93,11 @@ var (
 
 func SetSharedLibraryPath(path string) {
 	ortLibPath = path
+}
+
+// GetVersion returns the loaded ONNX Runtime library version string (e.g. "1.29.0").
+func GetVersion() string {
+	return ortVersion
 }
 
 func InitializeEnvironment() error {
@@ -108,6 +118,11 @@ func InitializeEnvironment() error {
 	if err != nil {
 		_ = closeLibrary(handle)
 		return err
+	}
+
+	cVersion := C.GetOrtVersion(apiBasePtr)
+	if cVersion != nil {
+		ortVersion = C.GoString(cVersion)
 	}
 
 	ortApi = (*C.OrtApi)(C.GetOrtApi(apiBasePtr, C.uint32_t(26))) // version 26
@@ -511,6 +526,10 @@ func NewTensor[T TensorData](shape Shape, data []T) (*Tensor[T], error) {
 		dtype = TensorElementDataTypeUint16
 	case uint32:
 		dtype = TensorElementDataTypeUint32
+	case float16.Float16:
+		dtype = TensorElementDataTypeFloat16
+	case bfloat16.BFloat16:
+		dtype = TensorElementDataTypeBFloat16
 	case uint64:
 		dtype = TensorElementDataTypeUint64
 	default:
@@ -582,6 +601,10 @@ func NewEmptyTensor[T TensorData](shape Shape) (*Tensor[T], error) {
 		dtype = TensorElementDataTypeUint16
 	case uint32:
 		dtype = TensorElementDataTypeUint32
+	case float16.Float16:
+		dtype = TensorElementDataTypeFloat16
+	case bfloat16.BFloat16:
+		dtype = TensorElementDataTypeBFloat16
 	case uint64:
 		dtype = TensorElementDataTypeUint64
 	default:

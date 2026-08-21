@@ -113,11 +113,21 @@ func New(config string) (compute.Backend, error) {
 		return nil, errors.Wrap(err, "failed to initialize onnxruntime-web")
 	}
 
+	hasFloat16 := false
+	if ep == "webgpu" {
+		hasFloat16 = web.HasWebGPUFloat16()
+	} else if ep == "wasm" || ep == "" {
+		hasFloat16 = true // ORT Web WebAssembly CPU runtime supports float16 models
+	}
+
 	return &Backend{
 		config:             config,
+		version:            web.GetVersion(),
 		executionProvider:  ep,
 		logSeverity:        logSeverity,
 		enableGraphCapture: enableGraphCapture,
+		hasFloat16:         hasFloat16,
+		hasBFloat16:        false,
 	}, nil
 }
 
