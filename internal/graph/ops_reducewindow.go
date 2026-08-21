@@ -7,10 +7,165 @@ import (
 
 	"github.com/gomlx/compute"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
+	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapeinference"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
+	"k8s.io/klog/v2"
 )
+
+func (f *Function) getPadValue(reductionType compute.ReduceOpType, dtype dtypes.DType) (compute.Value, error) {
+	switch reductionType {
+	case compute.ReduceOpSum:
+		return MakeScalar(f, 0, dtype)
+	case compute.ReduceOpMax:
+		return MakeScalar(f, dtype.LowestValue(), dtype)
+	}
+	return nil, errors.Wrapf(compute.ErrNotImplemented, "getPadValue for %s/%s", reductionType, dtype)
+}
+
+// reduceWindowWithSlices implements window reduction by decomposing the dilated window into
+// multiple strided ONNX "Slice" operations (one slice per position in the window grid) and accumulating
+// them element-wise (using f.Max for ReduceOpMax or f.Add for ReduceOpSum).
+//
+// Note: The number of Slice operations generated depends ONLY on the kernel window size (e.g. 3x3 = 9 slices),
+// NOT on the input/image resolution. Each Slice extracts the full strided tensor in parallel on the GPU.
+//
+// This is used as a workaround for WebGPU, where ONNX Runtime Web's MaxPool WGSL shader has an upstream
+// bug that ignores window dilations (treating them as dilation=1).
+func (f *Function) reduceWindowWithSlices(
+	opNode *Node,
+	reductionType compute.ReduceOpType,
+	windowDimensions, strides, windowDilations []int,
+	paddings [][2]int,
+	outShape shapes.Shape,
+) (compute.Value, error) {
+	rank := opNode.shape.Rank()
+	effStrides := make([]int, rank)
+	for i := range rank {
+		if i < len(strides) && strides[i] > 0 {
+			effStrides[i] = strides[i]
+		} else if i < len(windowDimensions) && windowDimensions[i] > 0 {
+			effStrides[i] = windowDimensions[i]
+		} else {
+			effStrides[i] = 1
+		}
+	}
+	effWinDil := make([]int, rank)
+	for i := range rank {
+		if i < len(windowDilations) && windowDilations[i] > 0 {
+			effWinDil[i] = windowDilations[i]
+		} else {
+			effWinDil[i] = 1
+		}
+	}
+	effWinDims := make([]int, rank)
+	for i := range rank {
+		if i < len(windowDimensions) && windowDimensions[i] > 0 {
+			effWinDims[i] = windowDimensions[i]
+		} else {
+			effWinDims[i] = 1
+		}
+	}
+
+	current := opNode
+	hasPadding := false
+	for _, p := range paddings {
+		if p[0] > 0 || p[1] > 0 {
+			hasPadding = true
+			break
+		}
+	}
+	if hasPadding {
+		padVal, errVal := f.getPadValue(reductionType, opNode.shape.DType)
+		if errVal != nil {
+			return nil, errVal
+		}
+		padAxes := make([]compute.PadAxis, rank)
+		for i, p := range paddings {
+			padAxes[i] = compute.PadAxis{Start: p[0], End: p[1]}
+		}
+		paddedVal, errPad := f.Pad(current, padVal, padAxes...)
+		if errPad != nil {
+			return nil, errPad
+		}
+		current = paddedVal.(*Node)
+	}
+
+	totalWindowElements := 1
+	for _, w := range effWinDims {
+		totalWindowElements *= w
+	}
+
+	getWindowIndices := func(idx int) []int {
+		indices := make([]int, rank)
+		rem := idx
+		for i := rank - 1; i >= 0; i-- {
+			w := effWinDims[i]
+			indices[i] = rem % w
+			rem /= w
+		}
+		return indices
+	}
+
+	axes64 := make([]int64, rank)
+	steps64 := make([]int64, rank)
+	for i := range rank {
+		axes64[i] = int64(i)
+		steps64[i] = int64(effStrides[i])
+	}
+	axesConst, err := f.Constant(axes64, rank)
+	if err != nil {
+		return nil, err
+	}
+	stepsConst, err := f.Constant(steps64, rank)
+	if err != nil {
+		return nil, err
+	}
+
+	var combined compute.Value
+	for k := 0; k < totalWindowElements; k++ {
+		winIdx := getWindowIndices(k)
+		starts := make([]int64, rank)
+		ends := make([]int64, rank)
+		for i := range rank {
+			offset := winIdx[i] * effWinDil[i]
+			starts[i] = int64(offset)
+			ends[i] = int64(offset + outShape.Dimensions[i]*effStrides[i])
+		}
+		startsConst, err := f.Constant(starts, rank)
+		if err != nil {
+			return nil, err
+		}
+		endsConst, err := f.Constant(ends, rank)
+		if err != nil {
+			return nil, err
+		}
+
+		sliceNode := f.addNode(&Node{
+			opType: "Slice",
+			inputs: []*Node{current, startsConst.(*Node), endsConst.(*Node), axesConst.(*Node), stepsConst.(*Node)},
+			shape:  outShape,
+		})
+
+		if combined == nil {
+			combined = sliceNode
+		} else {
+			var errCombine error
+			switch reductionType {
+			case compute.ReduceOpMax:
+				combined, errCombine = f.Max(combined, sliceNode)
+			case compute.ReduceOpSum:
+				combined, errCombine = f.Add(combined, sliceNode)
+			}
+			if errCombine != nil {
+				return nil, errCombine
+			}
+		}
+	}
+
+	return combined, nil
+}
 
 func (f *Function) ReduceWindow(
 	operand compute.Value,
@@ -35,6 +190,20 @@ func (f *Function) ReduceWindow(
 		if d > 1 {
 			return nil, errors.Wrap(compute.ErrNotImplemented, "input dilations > 1 not supported by ONNX pooling operators")
 		}
+	}
+
+	hasWindowDilation := false
+	for _, d := range windowDilations {
+		if d > 1 {
+			hasWindowDilation = true
+			break
+		}
+	}
+	if hasWindowDilation && f.isWebGPU() {
+		if f.LogSeverity() >= 0 && f.LogSeverity() <= 2 {
+			klog.Infof("ReduceWindow implemented with individual slices for WebGPU")
+		}
+		return f.reduceWindowWithSlices(opNode, reductionType, windowDimensions, strides, windowDilations, paddings, outShape)
 	}
 
 	var ortOpType string
