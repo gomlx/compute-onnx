@@ -11,7 +11,6 @@ import (
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
 	"github.com/gomlx/compute/dtypes/float16"
-	"github.com/gomlx/compute/dtypes/gotype"
 	"github.com/gomlx/compute/notimplemented"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
@@ -95,37 +94,83 @@ func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
 }
 
 // MakeScalar constructs a 0D scalar constant tensor for the given value and DType.
-func MakeScalar[T gotype.NumericNotComplex](f *Function, value T, dtype dtypes.DType) (compute.Value, error) {
+func MakeScalar(f *Function, value any, dtype dtypes.DType) (compute.Value, error) {
+	if value == nil {
+		return nil, errors.New("MakeScalar value cannot be nil")
+	}
+	targetType := dtype.GoType()
+	if targetType == nil {
+		return nil, errors.Errorf("unsupported DType %s for MakeScalar", dtype)
+	}
+
+	valVal := reflect.ValueOf(value)
+	if valVal.Type() == targetType {
+		slice := reflect.MakeSlice(reflect.SliceOf(targetType), 1, 1)
+		slice.Index(0).Set(valVal)
+		return f.Constant(slice.Interface())
+	}
+
 	var flat any
 	switch dtype {
-	case dtypes.Float32:
-		flat = []float32{float32(value)}
-	case dtypes.Float64:
-		flat = []float64{float64(value)}
-	case dtypes.Int32:
-		flat = []int32{int32(value)}
-	case dtypes.Int64:
-		flat = []int64{int64(value)}
-	case dtypes.Int16:
-		flat = []int16{int16(value)}
-	case dtypes.Int8:
-		flat = []int8{int8(value)}
-	case dtypes.Uint8:
-		flat = []uint8{uint8(value)}
-	case dtypes.Uint16:
-		flat = []uint16{uint16(value)}
-	case dtypes.Uint32:
-		flat = []uint32{uint32(value)}
-	case dtypes.Uint64:
-		flat = []uint64{uint64(value)}
 	case dtypes.Float16:
-		flat = []float16.Float16{float16.FromFloat32(float32(value))}
+		switch v := value.(type) {
+		case float16.Float16:
+			flat = []float16.Float16{v}
+		case bfloat16.BFloat16:
+			flat = []float16.Float16{float16.FromFloat32(v.Float32())}
+		default:
+			var f32 float32
+			switch {
+			case valVal.Kind() == reflect.Float32 || valVal.Kind() == reflect.Float64:
+				f32 = float32(valVal.Float())
+			case valVal.CanInt():
+				f32 = float32(valVal.Int())
+			case valVal.CanUint():
+				f32 = float32(valVal.Uint())
+			default:
+				return nil, errors.Errorf("cannot convert %T to Float16 in MakeScalar", value)
+			}
+			flat = []float16.Float16{float16.FromFloat32(f32)}
+		}
 	case dtypes.BFloat16:
-		flat = []bfloat16.BFloat16{bfloat16.FromFloat32(float32(value))}
+		switch v := value.(type) {
+		case bfloat16.BFloat16:
+			flat = []bfloat16.BFloat16{v}
+		case float16.Float16:
+			flat = []bfloat16.BFloat16{bfloat16.FromFloat32(v.Float32())}
+		default:
+			var f32 float32
+			switch {
+			case valVal.Kind() == reflect.Float32 || valVal.Kind() == reflect.Float64:
+				f32 = float32(valVal.Float())
+			case valVal.CanInt():
+				f32 = float32(valVal.Int())
+			case valVal.CanUint():
+				f32 = float32(valVal.Uint())
+			default:
+				return nil, errors.Errorf("cannot convert %T to BFloat16 in MakeScalar", value)
+			}
+			flat = []bfloat16.BFloat16{bfloat16.FromFloat32(f32)}
+		}
 	case dtypes.Bool:
-		flat = []bool{value != 0}
+		switch {
+		case valVal.Kind() == reflect.Bool:
+			flat = []bool{valVal.Bool()}
+		case valVal.CanInt():
+			flat = []bool{valVal.Int() != 0}
+		case valVal.CanUint():
+			flat = []bool{valVal.Uint() != 0}
+		default:
+			return nil, errors.Errorf("cannot convert %T to Bool in MakeScalar", value)
+		}
 	default:
-		return nil, errors.Errorf("unsupported DType %s for MakeScalar", dtype)
+		if !valVal.Type().ConvertibleTo(targetType) {
+			return nil, errors.Errorf("cannot convert %T to %s in MakeScalar", value, dtype)
+		}
+		converted := valVal.Convert(targetType)
+		slice := reflect.MakeSlice(reflect.SliceOf(targetType), 1, 1)
+		slice.Index(0).Set(converted)
+		flat = slice.Interface()
 	}
 
 	return f.Constant(flat)
@@ -144,6 +189,10 @@ func (f *Function) Parent() compute.Function {
 
 func (f *Function) Builder() compute.Builder {
 	return f.builder
+}
+
+func (f *Function) isWebGPU() bool {
+	return f.builder != nil && f.builder.IsWebGPU()
 }
 
 func (f *Function) Shape(v compute.Value) (shapes.Shape, error) {
