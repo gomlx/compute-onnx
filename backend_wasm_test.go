@@ -95,8 +95,10 @@ func TestParseConfigGraphCapture(t *testing.T) {
 		{config: "webgpu,graph_capture=true", wantEP: "webgpu", wantGraphCapture: true},
 		{config: "webgpu,graph_capture=1", wantEP: "webgpu", wantGraphCapture: true},
 		{config: "webgpu,graph_capture=false", wantEP: "webgpu", wantGraphCapture: false},
+		{config: "webgpu,graph_capture=0", wantEP: "webgpu", wantGraphCapture: false},
 		{config: "webgpu,graph_capture", wantEP: "webgpu", wantGraphCapture: true},
 		{config: "onnx:webgpu,graph_capture=true,log=2", wantEP: "webgpu", wantGraphCapture: true},
+		{config: "webgpu,graph_capture=invalid_bool", wantErr: true},
 	}
 
 	for _, tt := range tests {

@@ -6,6 +6,7 @@ package onnxbackend
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gomlx/compute"
@@ -58,7 +59,11 @@ func parseConfig(config string) (ep string, logSeverity int, enableGraphCapture 
 				}
 				logSeverity = max(3-level, 0)
 			} else if key == "graph_capture" || key == "graphcapture" || key == "enable_graph_capture" || key == "enablegraphcapture" {
-				enableGraphCapture = val == "true" || val == "1" || val == "yes" || val == "on"
+				var errBool error
+				enableGraphCapture, errBool = strconv.ParseBool(val)
+				if errBool != nil {
+					return "", 0, false, errors.Wrapf(errBool, "invalid boolean value for %q: %q", key, val)
+				}
 			} else {
 				return "", 0, false, errors.Errorf("unknown configuration option %q", key)
 			}
