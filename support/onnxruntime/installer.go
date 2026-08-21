@@ -177,26 +177,39 @@ type githubRelease struct {
 	TagName string `json:"tag_name"`
 }
 
+var knownLatestPatch = map[string]string{
+	"1.27": "1.27.1",
+	"1.24": "1.24.4",
+	"1.29": "1.29.0",
+}
+
 // ResolveLatestPatchVersion queries GitHub releases to find the highest patch version for a given major.minor string (e.g. "1.27" -> "1.27.1").
 func ResolveLatestPatchVersion(majorMinor string) string {
+	fallback := func() string {
+		if known, ok := knownLatestPatch[majorMinor]; ok {
+			return known
+		}
+		return majorMinor + ".0"
+	}
+
 	resp, err := http.Get("https://api.github.com/repos/microsoft/onnxruntime/releases?per_page=100")
 	if err != nil {
-		return majorMinor + ".0"
+		return fallback()
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return majorMinor + ".0"
+		return fallback()
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return majorMinor + ".0"
+		return fallback()
 	}
 
 	var releases []githubRelease
 	if err := json.Unmarshal(body, &releases); err != nil {
-		return majorMinor + ".0"
+		return fallback()
 	}
 
 	prefix := "v" + majorMinor + "."
@@ -218,7 +231,7 @@ func ResolveLatestPatchVersion(majorMinor string) string {
 	if highestPatch >= 0 {
 		return fmt.Sprintf("%s.%d", majorMinor, highestPatch)
 	}
-	return majorMinor + ".0"
+	return fallback()
 }
 
 // NormalizeVersion cleans up user-provided version strings (e.g., "v1.29.0", "v1.29", "1.29") into standard semver "1.29.0".
