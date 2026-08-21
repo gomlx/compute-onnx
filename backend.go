@@ -34,8 +34,10 @@ type Backend struct {
 	version            string
 	cuda               bool
 	executionProvider  string
+	webVersion         string
 	logSeverity        int
 	enableGraphCapture bool
+	hasFloat64         bool
 	hasFloat16         bool
 	hasBFloat16        bool
 	isFinalized        bool
@@ -62,6 +64,11 @@ func (b *Backend) LogSeverity() int {
 // ExecutionProvider returns the execution provider configured for the backend (e.g. "webgpu", "wasm", "cuda", or "").
 func (b *Backend) ExecutionProvider() string {
 	return b.executionProvider
+}
+
+// WebVersion returns the configured web version string (e.g. "dev", "@latest", "1.27", or "").
+func (b *Backend) WebVersion() string {
+	return b.webVersion
 }
 
 var _ compute.Backend = (*Backend)(nil)
@@ -145,7 +152,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		DynamicAxes:                 true,
 	}
 	caps.DTypes[dtypes.Float32] = true
-	caps.DTypes[dtypes.Float64] = true
+	caps.DTypes[dtypes.Float64] = b.hasFloat64
 	caps.DTypes[dtypes.Float16] = b.hasFloat16
 	caps.DTypes[dtypes.BFloat16] = b.hasBFloat16
 	caps.DTypes[dtypes.Int32] = true

@@ -18,8 +18,8 @@ Supported execution providers:
 
 | Provider | Config Options | Description |
 | :--- | :--- | :--- |
-| **WebGPU** | `onnx:webgpu`, `onnx:gpu` | Executes computation kernels via client GPU shaders using WebGPU. Best for large models and parallel batches. |
-| **WASM (CPU)** | `onnx:wasm`, `onnx:cpu` | Executes via CPU WebAssembly using SIMD instructions. Low latency for small models and single-sample inference. |
+| **WebGPU** | `onnx:webgpu`, `onnx:gpu` | Executes computation kernels via client GPU shaders using WebGPU. Best for large models and parallel batches. *(Note: WebGPU shaders only support `Float32`, `Float16`, `Int32`, `Uint32`; `Float64` operations are supported via automatic fallback to the CPU WebAssembly runtime).* |
+| **WASM (CPU)** | `onnx:wasm`, `onnx:cpu` | Executes via CPU WebAssembly using SIMD instructions. Low latency for small models and single-sample inference. Supports full float64 operations. |
 | **WebNN** | `onnx:webnn` | Executes using browser Web Neural Network hardware acceleration (NPU/GPU/CPU). Experimental in Chromium browsers. |
 | **WebGL** | `onnx:webgl` | Legacy GPU shader acceleration via WebGL. |
 | **Default** | `onnx` (or empty) | **Auto-detects**: Uses **WebGPU** if an active GPU adapter is available; otherwise automatically defaults to **WASM (CPU)**. |
@@ -37,6 +37,9 @@ Controls the verbosity of ONNX Runtime's internal logging:
 - `log=2`: **Info, Warnings, and Errors**.
 - `log=3`: **Verbose / Debug**.
 
+### Web Version (`web_version=<version>`)
+*(Optional, Web only)* Specifies the onnxruntime-web npm version or tag used when loading from the CDN (e.g., `web_version=dev`, `web_version=1.27`, `web_version=v1.27`, `web_version=@latest`). Defaults to `dev`.
+
 ### WebGPU Graph Capture (`graph_capture=true`)
 *(Optional, WebGPU only)* Enables WebGPU command buffer recording and replay (`enableGraphCapture: true` in ONNX Runtime Web).
 - When enabled, ONNX Runtime Web records the WebGPU shader execution sequence into a static command buffer to reduce JavaScript dispatch overhead for static models.
@@ -46,6 +49,7 @@ Controls the verbosity of ONNX Runtime's internal logging:
 ```bash
 GOMLX_BACKEND="onnx:webgpu,log=1"
 GOMLX_BACKEND="onnx:webgpu,graph_capture=true"
+GOMLX_BACKEND="onnx:wasm,web_version=1.27"
 ```
 
 ---
@@ -56,8 +60,8 @@ There are three ways to make the ONNX Runtime Web JavaScript and WebAssembly bin
 
 ### Method 1: Automatic CDN Injection (Zero Configuration)
 If `window.ort` is not already loaded on the page when your Go WASM binary runs (for instance, during automated test runners like `wasmbrowsertest`), `compute-onnx` will automatically:
-1. Dynamically create and append a `<script>` tag loading `ort.min.js` from `https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/ort.min.js`.
-2. Configure `ort.env.wasm.wasmPaths` to fetch the required `.wasm` engine modules from the CDN on demand (`https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/`).
+1. Dynamically create and append a `<script>` tag loading `ort.min.js` (or `ort.webgpu.min.js` for WebGPU) from `https://cdn.jsdelivr.net/npm/onnxruntime-web@<web_version>/dist/`.
+2. Configure `ort.env.wasm.wasmPaths` to fetch the required `.wasm` engine modules from the CDN on demand (`https://cdn.jsdelivr.net/npm/onnxruntime-web@<web_version>/dist/`).
 
 *Note: Requires internet access on the client machine.*
 
@@ -218,6 +222,11 @@ Because of this architectural pipeline, **every single `Execute()` call on WebGP
 * **Batching on WebGPU**:
   - If you must use WebGPU for search trees or iterative inference, **batch multiple inputs (e.g. 32–128 items) into a single execution call**. The WebGPU dispatch overhead remains ~2ms whether evaluating 1 item or 100 items, multiplying effective throughput.
 
-### 3. Automatic Input GPU Buffer Pre-allocation
+### 3. Precision Support & `Float64` Fallback
+- **`Float32` & Integers (`Int32`, `Uint32`)**: Fully accelerated on WebGPU shaders.
+- **`Float16`**: Supported on WebGPU when the underlying GPU and browser adapter expose the `shader-f16` feature.
+- **`Float64` (`float64`)**: The WebGPU / WGSL specification does not support 64-bit floating point precision. Graphs containing `Float64` operations automatically fall back and execute via the bundled CPU WebAssembly runtime (`wasm`).
+
+### 4. Automatic Input GPU Buffer Pre-allocation
 `compute-onnx` automatically pre-allocates static-shaped input `GPUBuffer` descriptors when creating WebGPU executables and streams dynamic inputs via WebGPU's bulk DMA `device.queue.writeBuffer(...)`. This eliminates per-step memory allocations and minimizes multi-input graph overhead.
 

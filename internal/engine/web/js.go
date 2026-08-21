@@ -5,6 +5,8 @@
 package web
 
 import (
+	"fmt"
+	"strings"
 	"syscall/js"
 	"time"
 
@@ -167,8 +169,27 @@ func HasWebNN() bool {
 	return !ml.IsUndefined() && !ml.IsNull()
 }
 
-// EnsureORTLoaded checks if window.ort is defined. If not, it dynamically loads ort.min.js via script tag or returns error.
-func EnsureORTLoaded() error {
+// DefaultORTWebVersion is the default version of onnxruntime-web used if not specified.
+// const DefaultORTWebVersion = "latest"
+const DefaultORTWebVersion = "dev"
+
+// NormalizeORTWebVersion normalizes user-provided version strings (e.g., "1.27", "v1.27", "@latest", "latest", "dev", "@dev")
+// into a clean version tag or number suitable for npm CDN URLs.
+func NormalizeORTWebVersion(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "@")
+	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "V")
+	if v == "" {
+		return DefaultORTWebVersion
+	}
+	return v
+}
+
+// EnsureORTLoaded checks if window.ort is defined. If not, it dynamically loads ort runtime via script tag or returns error.
+// The version argument specifies the onnxruntime-web version to fetch from CDN (defaults to DefaultORTWebVersion if empty).
+// The executionProvider argument hints which JS bundle to load (e.g. "ort.webgpu.min.js" for webgpu/webnn if desired, or standard "ort.min.js").
+func EnsureORTLoaded(version string, executionProvider string) error {
 	global := js.Global()
 	ortVal := global.Get("ort")
 	if !ortVal.IsUndefined() && !ortVal.IsNull() {
@@ -181,8 +202,14 @@ func EnsureORTLoaded() error {
 		return errors.New("neither window.ort nor window.document is available")
 	}
 
+	normVersion := NormalizeORTWebVersion(version)
+	scriptFile := "ort.min.js"
+
+	scriptSrc := fmt.Sprintf("https://cdn.jsdelivr.net/npm/onnxruntime-web@%s/dist/%s", normVersion, scriptFile)
+	wasmBasePath := fmt.Sprintf("https://cdn.jsdelivr.net/npm/onnxruntime-web@%s/dist/", normVersion)
+
 	script := doc.Call("createElement", "script")
-	script.Set("src", "https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/ort.min.js")
+	script.Set("src", scriptSrc)
 
 	loadedCh := make(chan error, 1)
 	var onload, onerror js.Func
@@ -193,7 +220,7 @@ func EnsureORTLoaded() error {
 		return nil
 	})
 	onerror = js.FuncOf(func(this js.Value, args []js.Value) any {
-		loadedCh <- errors.New("failed to load onnxruntime-web script from CDN")
+		loadedCh <- errors.Errorf("failed to load onnxruntime-web script from %s", scriptSrc)
 		onload.Release()
 		onerror.Release()
 		return nil
@@ -224,15 +251,13 @@ func EnsureORTLoaded() error {
 		env.Set("logLevel", "error")
 		wasmEnv := env.Get("wasm")
 		if !wasmEnv.IsUndefined() && !wasmEnv.IsNull() {
-			wasmEnv.Set("wasmPaths", "https://cdn.jsdelivr.net/npm/onnxruntime-web@latest/dist/")
+			wasmEnv.Set("wasmPaths", wasmBasePath)
 			wasmEnv.Set("numThreads", 1) // 1 thread by default for browser wasm stability
 		}
 	}
 
 	return nil
 }
-
-const DefaultORTWebVersion = ""
 
 // GetVersion returns the onnxruntime-web version string from window.ort.env.versions.web (or fallback).
 func GetVersion() string {
