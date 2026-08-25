@@ -184,28 +184,50 @@ func CompileToProto(b *Builder) (*CompiledModel, error) {
 	var outputs []*onnx.ValueInfoProto
 	var outputNames []string
 	var outputShapes []shapes.Shape
-
-	for _, ret := range mainFn.returns {
-		outputNames = append(outputNames, ret.name)
-		outputShapes = append(outputShapes, ret.shape)
+	seenOutputs := make(map[string]bool)
+	for i, ret := range mainFn.returns {
+		retNode := ret
+		if retNode.opType == "Parameter" || retNode.opType == "Constant" || seenOutputs[retNode.name] {
+			// ONNX cannot have an input parameter or constant directly in graph.output without an op,
+			// nor can multiple graph outputs share the same node name. Insert an Identity node.
+			identNode := &Node{
+				name:   fmt.Sprintf("%s_out_%d", retNode.name, i),
+				opType: "Identity",
+				inputs: []*Node{retNode},
+				shape:  retNode.shape,
+			}
+			mainFn.nodes = append(mainFn.nodes, identNode)
+			mainFn.returns[i] = identNode
+			retNode = identNode
+		}
+		seenOutputs[retNode.name] = true
+		outputNames = append(outputNames, retNode.name)
+		outputShapes = append(outputShapes, retNode.shape)
 		outputs = append(outputs, &onnx.ValueInfoProto{
-			Name: ret.name,
+			Name: retNode.name,
 			Type: &onnx.TypeProto{
 				Value: &onnx.TypeProto_TensorType{
 					TensorType: &onnx.TypeProto_Tensor{
-						ElemType: int32(DTypeToONNX(ret.shape.DType)),
-						Shape:    ShapeToONNX(ret.shape),
+						ElemType: int32(DTypeToONNX(retNode.shape.DType)),
+						Shape:    ShapeToONNX(retNode.shape),
 					},
 				},
 			},
 		})
 	}
 
+	sortedNodes = topologicalSort(mainFn.nodes, mainFn.returns)
+
 	var onnxNodes []*onnx.NodeProto
 	var onnxInitializers []*onnx.TensorProto
 
 	for _, node := range sortedNodes {
 		if node.opType == "Parameter" {
+			continue
+		}
+
+		if node.opType == "" {
+			// Sub-output node reference (e.g. 2nd output of a multi-output node like MaxPool)
 			continue
 		}
 
