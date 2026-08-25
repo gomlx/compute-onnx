@@ -160,7 +160,12 @@ func (f *Function) DotGeneral(
 		}
 	}
 
-	canUseMatMul := batchAxesMatch && len(lhsContractingAxes) == 1 && len(rhsContractingAxes) == 1
+	// ONNX MatMul operator only supports floating-point and 32/64-bit integer types.
+	matMulDTypeSupported := accumulationDType.IsFloat() ||
+		accumulationDType == dtypes.Int32 || accumulationDType == dtypes.Int64 ||
+		accumulationDType == dtypes.Uint32 || accumulationDType == dtypes.Uint64
+
+	canUseMatMul := matMulDTypeSupported && batchAxesMatch && len(lhsContractingAxes) == 1 && len(rhsContractingAxes) == 1 && lhsRank <= 2 && rhsRank <= 2
 
 	if canUseMatMul {
 		matLhs := lhsInput

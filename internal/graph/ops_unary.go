@@ -13,6 +13,13 @@ import (
 )
 
 func (f *Function) Abs(x compute.Value) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("Abs: input must be a valid onnxruntime node")
+	}
+	if xNode.shape.DType.IsComplex() {
+		return nil, errors.Wrapf(compute.ErrNotImplemented, "Abs for complex dtype %s is not implemented for ONNX Runtime backend", xNode.shape.DType)
+	}
 	return f.addUnaryOp(compute.OpTypeAbs, "Abs", x)
 }
 

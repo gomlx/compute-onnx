@@ -236,23 +236,25 @@ func (f *Function) ReduceWindow(
 			effectivePaddings = make([][2]int, rank)
 		}
 
-		// Reshape 1D -> 4D: (1, 1, 1, N)
-		reshapeDims := make([]int, 4)
-		reshapeDims[0] = 1
-		reshapeDims[1] = 1
-		reshapeDims[2] = 1
-		for i := range rank {
-			reshapeDims[3-(rank-1)+i] = opNode.shape.Dimensions[i]
+		// Reshape rank -> 4D: (1, 1, ..., N)
+		reshapeDims := []int{1, 1, 1, 1}
+		win4D := []int{1, 1, 1, 1}
+		stride4D := []int{1, 1, 1, 1}
+		winDil4D := []int{1, 1, 1, 1}
+		pad4D := [][2]int{{0, 0}, {0, 0}, {0, 0}, {0, 0}}
+
+		for i := 0; i < rank; i++ {
+			dimIdx := 4 - rank + i
+			reshapeDims[dimIdx] = opNode.shape.Dimensions[i]
+			win4D[dimIdx] = effectiveWindow[i]
+			stride4D[dimIdx] = effectiveStrides[i]
+			winDil4D[dimIdx] = effectiveWindowDilations[i]
+			pad4D[dimIdx] = effectivePaddings[i]
 		}
 		in4D, errR := f.Reshape(opNode, reshapeDims...)
 		if errR != nil {
 			return nil, errR
 		}
-
-		win4D := []int{1, 1, 1, effectiveWindow[0]}
-		stride4D := []int{1, 1, 1, effectiveStrides[0]}
-		winDil4D := []int{1, 1, 1, effectiveWindowDilations[0]}
-		pad4D := [][2]int{{0, 0}, {0, 0}, {0, 0}, effectivePaddings[0]}
 
 		res4D, errP := f.ReduceWindow(in4D, reductionType, win4D, stride4D, nil, winDil4D, pad4D)
 		if errP != nil {
@@ -300,6 +302,16 @@ func (f *Function) ReduceWindow(
 		if err != nil {
 			return nil, errors.Wrap(err, "ReduceWindow: input transpose failed")
 		}
+	}
+
+	origDType := opNode.shape.DType
+	needDTypeCast := (ortOpType == "AveragePool" && !origDType.IsFloat())
+	if needDTypeCast {
+		castVal, errC := f.ConvertDType(inpVal, dtypes.Float32)
+		if errC != nil {
+			return nil, errC
+		}
+		inpVal = castVal
 	}
 
 	// 2. Prepare attributes for ONNX MaxPool / AveragePool (kernel_shape, pads, strides, dilations)
@@ -368,6 +380,12 @@ func (f *Function) ReduceWindow(
 			Type: onnx.AttributeProto_INTS,
 			Ints: onnxDilations,
 		})
+	} else if ortOpType == "AveragePool" {
+		attributes = append(attributes, &onnx.AttributeProto{
+			Name: "count_include_pad",
+			Type: onnx.AttributeProto_INT,
+			I:    1,
+		})
 	}
 
 	// 3. Intermediate NCHW output shape for Pool node
@@ -378,7 +396,11 @@ func (f *Function) ReduceWindow(
 		origSpatialAxis := inputPerm[2+i]
 		poolOutDims[2+i] = outShape.Dimensions[origSpatialAxis]
 	}
-	poolOutShape := shapes.Make(outShape.DType, poolOutDims...)
+	poolDType := outShape.DType
+	if needDTypeCast {
+		poolDType = dtypes.Float32
+	}
+	poolOutShape := shapes.Make(poolDType, poolOutDims...)
 
 	f.nodeCount++
 	poolNode := &Node{
@@ -399,7 +421,7 @@ func (f *Function) ReduceWindow(
 			windowElements *= int(k)
 		}
 		if windowElements > 1 {
-			scaleConst, errC := f.Constant([]float32{float32(windowElements)})
+			scaleConst, errC := f.MakeScalar(windowElements, poolDType)
 			if errC != nil {
 				return nil, errC
 			}
@@ -408,6 +430,14 @@ func (f *Function) ReduceWindow(
 				return nil, err
 			}
 		}
+	}
+
+	if needDTypeCast {
+		castBack, errC := f.ConvertDType(poolResult, origDType)
+		if errC != nil {
+			return nil, errC
+		}
+		poolResult = castBack
 	}
 
 	// 4. Transpose pool output back to target layout if needed
@@ -430,6 +460,5 @@ func (f *Function) ReduceWindow(
 	if needOutputTranspose {
 		return f.Transpose(poolResult, outputPerm...)
 	}
-
 	return poolResult, nil
 }
