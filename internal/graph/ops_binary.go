@@ -28,7 +28,30 @@ func (f *Function) Div(lhs, rhs compute.Value) (compute.Value, error) {
 }
 
 func (f *Function) Rem(lhs, rhs compute.Value) (compute.Value, error) {
-	return f.addBinaryOp(compute.OpTypeRem, "Mod", lhs, rhs)
+	lhsNode, ok1 := lhs.(*Node)
+	rhsNode, ok2 := rhs.(*Node)
+	if !ok1 || !ok2 {
+		return nil, errors.New("inputs must be valid onnxruntime nodes")
+	}
+	outShape, err := shapeinference.BinaryOp(compute.OpTypeRem, lhsNode.shape, rhsNode.shape)
+	if err != nil {
+		return nil, err
+	}
+	var attrs []*onnx.AttributeProto
+	if lhsNode.shape.DType.IsFloat() {
+		attrs = append(attrs, &onnx.AttributeProto{
+			Name: "fmod",
+			Type: onnx.AttributeProto_INT,
+			I:    1,
+		})
+	}
+	node := &Node{
+		opType:     "Mod",
+		inputs:     []*Node{lhsNode, rhsNode},
+		shape:      outShape,
+		attributes: attrs,
+	}
+	return f.addNode(node), nil
 }
 
 func (f *Function) Max(lhs, rhs compute.Value) (compute.Value, error) {

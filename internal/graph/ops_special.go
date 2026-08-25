@@ -146,20 +146,90 @@ func (f *Function) BroadcastInDim(x compute.Value, outputShape shapes.Shape, bro
 		return nil, err
 	}
 
-	targetDims64 := make([]int64, outputShape.Rank())
-	for i, d := range outputShape.Dimensions {
-		targetDims64[i] = int64(d)
-	}
-	targetDimsConst, err := f.Constant(targetDims64, outputShape.Rank())
-	if err != nil {
-		return nil, err
+	var targetDimsNode compute.Value
+	if outputShape.IsDynamic() {
+		parts := make([]compute.Value, outputShape.Rank())
+		for i, d := range outputShape.Dimensions {
+			if d == shapes.DynamicDim {
+				axisName := outputShape.AxisName(i)
+				// Check if input node has the same named axis
+				matched := false
+				for j := range broadcastAxes {
+					if xNode.shape.Dimensions[j] == shapes.DynamicDim && xNode.shape.AxisName(j) == axisName && axisName != "" {
+						dynDim, err := f.DynamicDimensionSize(xNode, j)
+						if err != nil {
+							return nil, err
+						}
+						dynDim64, err := f.ConvertDType(dynDim, dtypes.Int64)
+						if err != nil {
+							return nil, err
+						}
+						parts[i], err = f.Reshape(dynDim64, 1)
+						if err != nil {
+							return nil, err
+						}
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					// Fallback: If input has dynamic dim at matching rank position
+					if i < xNode.shape.Rank() && xNode.shape.Dimensions[i] == shapes.DynamicDim {
+						dynDim, err := f.DynamicDimensionSize(xNode, i)
+						if err != nil {
+							return nil, err
+						}
+						dynDim64, err := f.ConvertDType(dynDim, dtypes.Int64)
+						if err != nil {
+							return nil, err
+						}
+						parts[i], err = f.Reshape(dynDim64, 1)
+						if err != nil {
+							return nil, err
+						}
+					} else {
+						// Shape/Reshape with 1 for unspecified dynamic dim
+						constNode, err := f.Constant([]int64{1}, 1)
+						if err != nil {
+							return nil, err
+						}
+						parts[i] = constNode
+					}
+				}
+			} else {
+				constNode, err := f.Constant([]int64{int64(d)}, 1)
+				if err != nil {
+					return nil, err
+				}
+				parts[i] = constNode
+			}
+		}
+		if len(parts) == 1 {
+			targetDimsNode = parts[0]
+		} else {
+			var err error
+			targetDimsNode, err = f.Concatenate(0, parts...)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		targetDims64 := make([]int64, outputShape.Rank())
+		for i, d := range outputShape.Dimensions {
+			targetDims64[i] = int64(d)
+		}
+		var err error
+		targetDimsNode, err = f.Constant(targetDims64, outputShape.Rank())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	outShape := outputShape
 	outShape.DType = xNode.shape.DType
 	node := &Node{
 		opType: "Expand",
-		inputs: []*Node{reshaped.(*Node), targetDimsConst.(*Node)},
+		inputs: []*Node{reshaped.(*Node), targetDimsNode.(*Node)},
 		shape:  outShape,
 	}
 	return f.addNode(node), nil
@@ -518,6 +588,24 @@ func (f *Function) DynamicSlice(operand compute.Value, startIndices []compute.Va
 	}
 
 	rank := opNode.shape.Rank()
+	if len(startIndices) == 1 && rank > 1 {
+		singleNode, ok := startIndices[0].(*Node)
+		if ok && singleNode.shape.Rank() == 1 && singleNode.shape.Dimensions[0] == rank {
+			unpacked := make([]compute.Value, rank)
+			for i := 0; i < rank; i++ {
+				sliceVal, err := f.Slice(singleNode, []int{i}, []int{i + 1}, []int{1})
+				if err != nil {
+					return nil, err
+				}
+				reshapedVal, err := f.Reshape(sliceVal)
+				if err != nil {
+					return nil, err
+				}
+				unpacked[i] = reshapedVal
+			}
+			startIndices = unpacked
+		}
+	}
 	if len(startIndices) != rank {
 		return nil, errors.Errorf("DynamicSlice: startIndices length (%d) must match operand rank (%d)", len(startIndices), rank)
 	}
@@ -637,6 +725,24 @@ func (f *Function) DynamicUpdateSlice(operand, update compute.Value, startIndice
 	rank := opNode.shape.Rank()
 	if upNode.shape.Rank() != rank {
 		return nil, errors.Errorf("DynamicUpdateSlice: operand rank (%d) must match update rank (%d)", rank, upNode.shape.Rank())
+	}
+	if len(startIndices) == 1 && rank > 1 {
+		singleNode, ok := startIndices[0].(*Node)
+		if ok && singleNode.shape.Rank() == 1 && singleNode.shape.Dimensions[0] == rank {
+			unpacked := make([]compute.Value, rank)
+			for i := 0; i < rank; i++ {
+				sliceVal, err := f.Slice(singleNode, []int{i}, []int{i + 1}, []int{1})
+				if err != nil {
+					return nil, err
+				}
+				reshapedVal, err := f.Reshape(sliceVal)
+				if err != nil {
+					return nil, err
+				}
+				unpacked[i] = reshapedVal
+			}
+			startIndices = unpacked
+		}
 	}
 	if len(startIndices) != rank {
 		return nil, errors.Errorf("DynamicUpdateSlice: startIndices length (%d) must match rank (%d)", len(startIndices), rank)

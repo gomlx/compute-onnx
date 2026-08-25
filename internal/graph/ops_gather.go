@@ -99,6 +99,49 @@ func (f *Function) Gather(
 
 	V := indicesNode.shape.Dimensions[indicesNode.shape.Rank()-1]
 
+	// Clamp indices to [0, dim-sliceSize] to match XLA / StableHLO semantics.
+	if !operandShape.IsDynamic() {
+		zeroConst, errZ := f.MakeScalar(int64(0), dtypes.Int64)
+		if errZ != nil {
+			return nil, errZ
+		}
+		maxBounds := make([]int64, V)
+		for i, axis := range startIndexMap {
+			dim := operandShape.Dimensions[axis]
+			sliceSize := sliceSizes[axis]
+			maxIdx := max(0, dim-sliceSize)
+			maxBounds[i] = int64(maxIdx)
+		}
+		maxConst, errM := f.Constant(maxBounds, len(maxBounds))
+		if errM != nil {
+			return nil, errM
+		}
+		if indicesNode.shape.Rank() > 1 {
+			bAxes := []int{indicesNode.shape.Rank() - 1}
+			bCastVal, errB := f.BroadcastInDim(maxConst, indicesNode.shape, bAxes)
+			if errB != nil {
+				return nil, errB
+			}
+			maxConst = bCastVal
+		}
+		clampedMin, errC1 := f.Max(indicesNode, zeroConst)
+		if errC1 != nil {
+			return nil, errC1
+		}
+		clampedMax, errC2 := f.Min(clampedMin, maxConst)
+		if errC2 != nil {
+			return nil, errC2
+		}
+		indicesNode = clampedMax.(*Node)
+	}
+
+	// Check if slice sizes for mapped axes are supported by GatherND (GatherND only gathers scalar indices along mapped axes, i.e. sliceSize == 1).
+	for _, axis := range startIndexMap {
+		if sliceSizes[axis] != 1 {
+			return nil, errors.Wrapf(compute.ErrNotImplemented, "Gather with sliceSize > 1 on mapped axis %d (sliceSize=%d) is not implemented for ONNX backend", axis, sliceSizes[axis])
+		}
+	}
+
 	// 2. Prepare operand by transposing the mapped dimensions to the front.
 	mappedSet := make(map[int]bool)
 	for _, axis := range startIndexMap {

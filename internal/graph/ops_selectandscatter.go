@@ -134,8 +134,9 @@ func (f *Function) SelectAndScatterMax(operand compute.Value, source compute.Val
 	f.nodes = append(f.nodes, maxPoolNode)
 
 	indicesNode := &Node{
-		name:  maxPoolIdxName,
-		shape: shapes.Make(dtypes.Int64, gradNCHW.shape.Dimensions...),
+		name:   maxPoolIdxName,
+		inputs: []*Node{maxPoolNode},
+		shape:  shapes.Make(dtypes.Int64, gradNCHW.shape.Dimensions...),
 	}
 
 	// 2. Scatter gradNCHW into zeros using indicesNode via ScatterElements (along spatial dimension)
@@ -172,9 +173,8 @@ func (f *Function) SelectAndScatterMax(operand compute.Value, source compute.Val
 		return nil, errM
 	}
 
-	// Zero destination tensor of shape [N, C, H*W]
-	zeroData := make([]float32, n*c*spatialTotal)
-	zerosNode, err := f.Constant(zeroData, n, c, spatialTotal)
+	// Zero destination tensor of shape [N, C, H*W] matching inpNCHW dtype
+	zerosNode, err := f.MakeZeros(shapes.Make(inpNCHW.shape.DType, n, c, spatialTotal))
 	if err != nil {
 		return nil, err
 	}
