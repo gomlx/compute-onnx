@@ -175,3 +175,40 @@ func TestMakeScalar(t *testing.T) {
 		}
 	}
 }
+
+func TestCPUExecutionOutputs(t *testing.T) {
+	b, err := New("cpu")
+	if err != nil {
+		t.Fatalf("Failed to create CPU backend: %+v", err)
+	}
+	defer b.Finalize()
+
+	t.Run("Constant Int64 on CPU", func(t *testing.T) {
+		got, err := testutil.Exec1(b, nil, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+			return f.Constant([]int64{12, 24}, 2)
+		})
+		if err != nil {
+			t.Fatalf("Exec failed on CPU: %+v", err)
+		}
+		t.Logf("Constant got: %v", got)
+		want := []int64{12, 24}
+		if ok, diff := testutil.IsInDelta(want, got, 0); !ok {
+			t.Errorf("Mismatch:\n%s", diff)
+		}
+	})
+
+	t.Run("Iota on CPU", func(t *testing.T) {
+		got, err := testutil.Exec1(b, nil, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+			return f.Iota(shapes.Make(dtypes.Int64, 2, 3), 1)
+		})
+		if err != nil {
+			t.Fatalf("Iota failed on CPU: %+v", err)
+		}
+		t.Logf("Iota got: %v", got)
+		want := [][]int64{{0, 1, 2}, {0, 1, 2}}
+		if ok, diff := testutil.IsInDelta(want, got, 0); !ok {
+			t.Errorf("Mismatch:\n%s", diff)
+		}
+	})
+}
+
