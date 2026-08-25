@@ -176,6 +176,28 @@ func MakeScalar(f *Function, value any, dtype dtypes.DType) (compute.Value, erro
 	return f.Constant(flat)
 }
 
+// MakeScalar constructs a 0D scalar constant tensor on Function for the given value and DType.
+func (f *Function) MakeScalar(value any, dtype dtypes.DType) (compute.Value, error) {
+	return MakeScalar(f, value, dtype)
+}
+
+// MakeValues constructs a constant tensor with shape filled with value by broadcasting a scalar.
+func (f *Function) MakeValues(value any, shape shapes.Shape) (compute.Value, error) {
+	scalar, err := f.MakeScalar(value, shape.DType)
+	if err != nil {
+		return nil, err
+	}
+	if shape.IsScalar() {
+		return scalar, nil
+	}
+	return f.BroadcastInDim(scalar, shape, nil)
+}
+
+// MakeZeros constructs a constant tensor with shape filled with zero by broadcasting a scalar zero.
+func (f *Function) MakeZeros(shape shapes.Shape) (compute.Value, error) {
+	return f.MakeValues(0, shape)
+}
+
 func (f *Function) Name() string {
 	return f.name
 }
