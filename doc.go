@@ -3,7 +3,8 @@
 /*
 Package onnxbackend implements an ONNX Runtime (ORT) compute backend for GoMLX (github.com/gomlx/compute).
 
-It allows GoMLX models to be executed via ONNX Runtime using either CPU or CUDA (NVIDIA GPU).
+It allows GoMLX models to be executed via ONNX Runtime using CPU, CUDA (NVIDIA GPU) or
+MIGraphX (AMD ROCm GPU).
 It supports dynamic shapes and exporting trained models to standard .onnx model files.
 
 # Registration & Initialization
@@ -29,9 +30,17 @@ Accelerator Selection:
     GOMLX_BACKEND=onnx:cpu
   - cuda / gpu: Force CUDA GPU execution using ONNX Runtime CUDA Execution Provider via IoBinding.
     GOMLX_BACKEND=onnx:cuda
+  - migraphx / rocm / amd: Force AMD GPU execution using ONNX Runtime MIGraphX Execution Provider.
+    Requires ROCm and MIGraphX installed (e.g. "sudo apt install migraphx migraphx-dev half").
+    If no ORT library with the MIGraphX provider is found, one is automatically extracted from AMD's
+    manylinux wheels (https://repo.radeon.com/rocm/manylinux/) matching the local ROCm version.
+    Only float32/int32/int64 graphs are advertised as supported, and models with scalar
+    (0-dimensional) inputs fall back to CPU execution.
+    GOMLX_BACKEND=onnx:migraphx
   - <path/to/libonnxruntime.so>: Explicit path to the ONNX Runtime shared library file (bypasses ONNXRUNTIME_SHARED_LIBRARY_PATH).
     GOMLX_BACKEND=onnx:/path/to/libonnxruntime.so
-  - (empty / default): Automatically detects if an NVIDIA GPU is available and defaults to CUDA, falling back to CPU otherwise.
+  - (empty / default): Automatically detects if an NVIDIA GPU is available and defaults to CUDA,
+    then checks for a discrete AMD GPU (ROCm/MIGraphX), falling back to CPU otherwise.
     GOMLX_BACKEND=onnx
 
 ONNX Runtime Internal Logging:

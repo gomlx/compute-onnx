@@ -6,7 +6,7 @@
 **ONNX Runtime** based compute backend for GoMLX.
 
 It allows GoMLX models to be executed via ONNX Runtime using:
-- **Native Desktop/Server**: CPU or CUDA (NVIDIA GPU).
+- **Native Desktop/Server**: CPU, CUDA (NVIDIA GPU), or MIGraphX (AMD ROCm GPU).
 - **WebAssembly / Browser**: WebGPU, CPU (WASM SIMD), WebNN, or WebGL in browsers (see [ORT Web Guide](docs/ort-web.md)).
 
 It supports dynamic shapes and exporting models to `.onnx` files.
@@ -25,6 +25,12 @@ Or targeting a specific accelerator (e.g. CUDA):
 GOMLX_BACKEND=onnx:cuda go run -tags=onnx github.com/gomlx/gomlx/examples/adult/demo
 ```
 
+Or on an AMD GPU (ROCm + MIGraphX):
+
+```bash
+GOMLX_BACKEND=onnx:migraphx go run -tags=onnx github.com/gomlx/gomlx/examples/adult/demo
+```
+
 ## Backend Options & Configuration
 
 Configuration can be specified in the `GOMLX_BACKEND` environment variable using `onnx:<options>` or `onnxruntime:<options>` (comma-separated).
@@ -39,11 +45,20 @@ Configuration can be specified in the `GOMLX_BACKEND` environment variable using
   ```bash
   GOMLX_BACKEND=onnx:cuda
   ```
+- **`migraphx`** / **`rocm`** / **`amd`**: Force AMD GPU execution (uses ONNX Runtime MIGraphX Execution Provider).
+  Requires ROCm and MIGraphX to be installed (`sudo apt install migraphx migraphx-dev half`). If no ORT library with the
+  MIGraphX provider is found, one is automatically installed from [AMD's manylinux wheels](https://repo.radeon.com/rocm/manylinux/)
+  matching the local ROCm version — it can also be installed manually with
+  `go run github.com/gomlx/compute-onnx/cmd/onnxruntime_installer -migraphx`.
+  Note: only float32/int32/int64 graphs are supported, and models with scalar (0-dimensional) inputs fall back to CPU.
+  ```bash
+  GOMLX_BACKEND=onnx:migraphx
+  ```
 - **Custom Library Path**: Specify an explicit path to the ONNX Runtime `.so` (or `.dylib` / `.dll`) shared library file. This explicitly bypasses `ONNXRUNTIME_SHARED_LIBRARY_PATH`.
   ```bash
   GOMLX_BACKEND=onnx:/path/to/libonnxruntime.so
   ```
-- **empty (default)**: Automatically detects if an NVIDIA GPU is present via `nvidia-smi` and defaults to CUDA if available, otherwise falling back to CPU.
+- **empty (default)**: Automatically detects if an NVIDIA GPU is present via `nvidia-smi` and defaults to CUDA if available, then checks for a discrete AMD GPU (ROCm/MIGraphX), otherwise falling back to CPU.
   ```bash
   GOMLX_BACKEND=onnx
   ```

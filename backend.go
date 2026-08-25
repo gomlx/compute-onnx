@@ -32,8 +32,8 @@ func MakeScalar(f *graph.Function, value any, dtype dtypes.DType) (compute.Value
 type Backend struct {
 	config             string
 	version            string
-	cuda               bool
-	executionProvider  string
+	gpuEP              string // Native GPU execution provider: "cuda", "migraphx", or "" for CPU only.
+	executionProvider  string // Web execution provider (wasm/webgpu/webnn); empty on native builds.
 	webVersion         string
 	logSeverity        int
 	enableGraphCapture bool
@@ -124,8 +124,11 @@ func (b *Backend) Description() string {
 	if b.executionProvider != "" {
 		return fmt.Sprintf("ONNX Runtime Web%s (%s) compute backend for GoMLX", verStr, b.executionProvider)
 	}
-	if b.cuda {
+	switch b.gpuEP {
+	case "cuda":
 		return fmt.Sprintf("ONNX Runtime%s (CUDA GPU) compute backend for GoMLX", verStr)
+	case "migraphx":
+		return fmt.Sprintf("ONNX Runtime%s (MIGraphX GPU) compute backend for GoMLX", verStr)
 	}
 	return fmt.Sprintf("ONNX Runtime%s (CPU) compute backend for GoMLX", verStr)
 }
@@ -138,8 +141,11 @@ func (b *Backend) DeviceDescription(deviceNum compute.DeviceNum) string {
 	if b.executionProvider != "" {
 		return fmt.Sprintf("Web (%s) Default Device", b.executionProvider)
 	}
-	if b.cuda {
+	switch b.gpuEP {
+	case "cuda":
 		return "CUDA GPU (ONNX Runtime Default Device)"
+	case "migraphx":
+		return "MIGraphX GPU (ONNX Runtime Default Device)"
 	}
 	return "CPU (ONNX Runtime Default Device)"
 }
@@ -150,6 +156,16 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		DTypes:                      make(map[dtypes.DType]bool),
 		PreferConstantsForVariables: true,
 		DynamicAxes:                 true,
+	}
+	if b.gpuEP == "migraphx" {
+		// The MIGraphX execution provider reliably supports only a subset of dtypes;
+		// others (e.g. float64, uint8) either fall back producing incorrect results
+		// or crash inside MIGraphX. Restrict the advertised capabilities accordingly,
+		// so graphs using unsupported dtypes fail cleanly at compilation time.
+		caps.DTypes[dtypes.Float32] = true
+		caps.DTypes[dtypes.Int32] = true
+		caps.DTypes[dtypes.Int64] = true
+		return caps
 	}
 	caps.DTypes[dtypes.Float32] = true
 	caps.DTypes[dtypes.Float64] = b.hasFloat64

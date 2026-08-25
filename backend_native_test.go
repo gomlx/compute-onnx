@@ -83,33 +83,37 @@ func TestParseConfig(t *testing.T) {
 
 	tests := []struct {
 		config            string
-		wantCuda          bool
+		wantEP            string
 		wantLog           int
 		wantCustomLibPath string
 		wantErr           bool
 	}{
-		{config: "cpu", wantCuda: false, wantLog: -1, wantCustomLibPath: ""},
-		{config: "cuda", wantCuda: true, wantLog: -1, wantCustomLibPath: ""},
-		{config: "cuda,log=2", wantCuda: true, wantLog: 1, wantCustomLibPath: ""},
-		{config: "onnx:cpu", wantCuda: false, wantLog: -1, wantCustomLibPath: ""},
-		{config: "onnxruntime:cuda", wantCuda: true, wantLog: -1, wantCustomLibPath: ""},
-		{config: "onnx:cuda,log=2", wantCuda: true, wantLog: 1, wantCustomLibPath: ""},
+		{config: "cpu", wantEP: "", wantLog: -1, wantCustomLibPath: ""},
+		{config: "cuda", wantEP: "cuda", wantLog: -1, wantCustomLibPath: ""},
+		{config: "cuda,log=2", wantEP: "cuda", wantLog: 1, wantCustomLibPath: ""},
+		{config: "onnx:cpu", wantEP: "", wantLog: -1, wantCustomLibPath: ""},
+		{config: "onnxruntime:cuda", wantEP: "cuda", wantLog: -1, wantCustomLibPath: ""},
+		{config: "onnx:cuda,log=2", wantEP: "cuda", wantLog: 1, wantCustomLibPath: ""},
+		{config: "migraphx", wantEP: "migraphx", wantLog: -1, wantCustomLibPath: ""},
+		{config: "rocm", wantEP: "migraphx", wantLog: -1, wantCustomLibPath: ""},
+		{config: "amd,log=0", wantEP: "migraphx", wantLog: 3, wantCustomLibPath: ""},
 		{config: "openxla:cuda", wantErr: true},
-		{config: cpuLibPath, wantCuda: false, wantLog: -1, wantCustomLibPath: cpuLibPath},
-		{config: cudaLibPath, wantCuda: cuda.HasNvidiaGPU(), wantLog: -1, wantCustomLibPath: cudaLibPath},
-		{config: "cuda," + cpuLibPath, wantCuda: true, wantLog: -1, wantCustomLibPath: cpuLibPath},
+		{config: cpuLibPath, wantEP: "", wantLog: -1, wantCustomLibPath: cpuLibPath},
+		// Auto-detection with a custom lib path depends on the GPUs present:
+		{config: cudaLibPath, wantEP: autoDetectedEP(cudaDir), wantLog: -1, wantCustomLibPath: cudaLibPath},
+		{config: "cuda," + cpuLibPath, wantEP: "cuda", wantLog: -1, wantCustomLibPath: cpuLibPath},
 		{config: "invalid_option_xyz", wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.config, func(t *testing.T) {
-			gotCuda, gotLog, gotPath, err := parseConfig(tt.config)
+			gotEP, gotLog, gotPath, err := parseConfig(tt.config)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseConfig(%q) error = %v, wantErr %v", tt.config, err, tt.wantErr)
 			}
 			if !tt.wantErr {
-				if gotCuda != tt.wantCuda {
-					t.Errorf("gotCuda = %v, want %v", gotCuda, tt.wantCuda)
+				if gotEP != tt.wantEP {
+					t.Errorf("got gpuEP = %q, want %q", gotEP, tt.wantEP)
 				}
 				if gotLog != tt.wantLog {
 					t.Errorf("gotLog = %v, want %v", gotLog, tt.wantLog)
@@ -120,6 +124,15 @@ func TestParseConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// autoDetectedEP returns the expected GPU EP when no explicit provider token is given,
+// given a directory that contains a fake CUDA provider library.
+func autoDetectedEP(dir string) string {
+	if cuda.HasNvidiaGPU() && cuda.IsCUDALibraryAvailable(dir) {
+		return "cuda"
+	}
+	return ""
 }
 
 func TestEnableAutoInstall(t *testing.T) {
@@ -148,7 +161,7 @@ func TestExplicitPathNoAutoInstall(t *testing.T) {
 	EnableAutoInstall(true)
 	nonExistentPath := filepath.Join(t.TempDir(), "nonexistent_libonnxruntime.so")
 
-	err := initializeORT(false, nonExistentPath)
+	err := initializeORT("", nonExistentPath)
 	if err == nil {
 		t.Fatal("expected error when explicit path does not exist, got nil")
 	}

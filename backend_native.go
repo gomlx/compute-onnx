@@ -14,6 +14,7 @@ import (
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/device/cuda"
+	"github.com/gomlx/compute-onnx/internal/device/rocm"
 	"github.com/gomlx/compute-onnx/internal/engine/native"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"github.com/gomlx/compute-onnx/support/onnxruntime"
@@ -78,7 +79,7 @@ func isLibraryPath(part string) bool {
 	return false
 }
 
-func initializeORT(cudaEnabled bool, customLibPath string) error {
+func initializeORT(gpuEP string, customLibPath string) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if isOrtInitialized {
@@ -90,15 +91,25 @@ func initializeORT(cudaEnabled bool, customLibPath string) error {
 		path = os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
 		if path == "" {
 			installDir, err := onnxruntime.GetInstallPath()
+			if gpuEP == "migraphx" {
+				// The AMD ROCm build installs into its own directory, so it does not
+				// clobber the standard (CPU/CUDA) library.
+				installDir, err = onnxruntime.GetMigraphxInstallPath()
+			}
 			if err == nil {
 				libFilename, err := onnxruntime.GetLibFilename()
 				if err == nil {
 					targetPath := filepath.Join(installDir, libFilename)
 					if _, err := os.Stat(targetPath); err == nil {
 						useInstalled := true
-						if cudaEnabled {
+						switch gpuEP {
+						case "cuda":
 							cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
 							if _, err := os.Stat(cudaLibPath); err != nil {
+								useInstalled = false
+							}
+						case "migraphx":
+							if !rocm.IsMigraphxLibraryAvailable(installDir) {
 								useInstalled = false
 							}
 						}
@@ -120,7 +131,12 @@ func initializeORT(cudaEnabled bool, customLibPath string) error {
 			return errors.Errorf("ONNX Runtime library not found (ONNXRUNTIME_SHARED_LIBRARY_PATH is not set) and auto-installation is disabled via %s or EnableAutoInstall(false)", NoAutoInstallEnv)
 		}
 		var err error
-		path, err = onnxruntime.Install(onnxruntime.DefaultVersion, cudaEnabled, "", "", false)
+		switch gpuEP {
+		case "migraphx":
+			path, err = onnxruntime.InstallMigraphx("", "", false)
+		default:
+			path, err = onnxruntime.Install(onnxruntime.DefaultVersion, gpuEP == "cuda", "", "", false)
+		}
 		if err != nil {
 			return errors.Wrap(err, "failed to automatically install ONNX Runtime library")
 		}
@@ -135,8 +151,10 @@ func initializeORT(cudaEnabled bool, customLibPath string) error {
 	return nil
 }
 
-func parseConfig(config string) (cudaEnabled bool, logSeverity int, customLibPath string, err error) {
-	cudaEnabled = false
+// parseConfig parses the backend configuration string and returns the selected GPU
+// execution provider ("cuda", "migraphx", or "" for CPU), log severity, and custom ORT library path.
+func parseConfig(config string) (gpuEP string, logSeverity int, customLibPath string, err error) {
+	gpuEP = ""
 	hasProvider := false
 	logSeverity = -1 // not set
 
@@ -145,7 +163,7 @@ func parseConfig(config string) (cudaEnabled bool, logSeverity int, customLibPat
 			var errEnv error
 			config, errEnv = ParseGOMLXBackendEnv(envVal)
 			if errEnv != nil {
-				return false, 0, "", errEnv
+				return "", 0, "", errEnv
 			}
 		}
 	} else if strings.Contains(config, ":") || strings.EqualFold(config, "onnx") || strings.EqualFold(config, "onnxruntime") {
@@ -153,16 +171,20 @@ func parseConfig(config string) (cudaEnabled bool, logSeverity int, customLibPat
 		if errEnv == nil {
 			config = parsed
 		} else if !isLibraryPath(config) && !strings.Contains(config, "=") {
-			return false, 0, "", errEnv
+			return "", 0, "", errEnv
 		}
 	}
 
 	config = strings.TrimSpace(config)
 	if config == "" {
-		if envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH"); envPath != "" {
-			return cuda.HasNvidiaGPU() && cuda.IsCUDALibraryAvailable(filepath.Dir(envPath)), -1, "", nil
+		envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
+		if envPath != "" {
+			return detectGPUProvider(filepath.Dir(envPath), false), -1, "", nil
 		}
-		return cuda.HasNvidiaGPU(), -1, "", nil
+		if installDir, installErr := onnxruntime.GetInstallPath(); installErr == nil {
+			return detectGPUProvider(installDir, true), -1, "", nil
+		}
+		return detectGPUProvider("", true), -1, "", nil
 	}
 
 	parts := strings.SplitSeq(config, ",")
@@ -178,41 +200,76 @@ func parseConfig(config string) (cudaEnabled bool, logSeverity int, customLibPat
 			if key == "log" {
 				var level int
 				if _, err := fmt.Sscanf(val, "%d", &level); err != nil {
-					return false, 0, "", errors.Errorf("invalid log level: %q", val)
+					return "", 0, "", errors.Errorf("invalid log level: %q", val)
 				}
 				severity := max(3-level, 0)
 				logSeverity = severity
 			} else if key == "web_version" || key == "webversion" {
 				// Ignored on native desktop platform.
 			} else {
-				return false, 0, "", errors.Errorf("unknown config option: %q", key)
+				return "", 0, "", errors.Errorf("unknown config option: %q", key)
 			}
 		} else {
 			partLower := strings.ToLower(part)
-			if partLower == "cuda" || partLower == "gpu" {
-				cudaEnabled = true
+			switch partLower {
+			case "cuda", "gpu":
+				gpuEP = "cuda"
 				hasProvider = true
-			} else if partLower == "cpu" {
-				cudaEnabled = false
+			case "migraphx", "rocm", "amd":
+				gpuEP = "migraphx"
 				hasProvider = true
-			} else if isLibraryPath(part) {
-				customLibPath = part
-			} else {
-				return false, 0, "", errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"gpu\", path to ORT library, or key=value option", part)
+			case "cpu":
+				gpuEP = ""
+				hasProvider = true
+			default:
+				if isLibraryPath(part) {
+					customLibPath = part
+				} else {
+					return "", 0, "", errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"migraphx\", path to ORT library, or key=value option", part)
+				}
 			}
 		}
 	}
 
 	if !hasProvider {
-		if customLibPath != "" {
-			cudaEnabled = cuda.HasNvidiaGPU() && cuda.IsCUDALibraryAvailable(filepath.Dir(customLibPath))
-		} else if envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH"); envPath != "" {
-			cudaEnabled = cuda.HasNvidiaGPU() && cuda.IsCUDALibraryAvailable(filepath.Dir(envPath))
-		} else {
-			cudaEnabled = cuda.HasNvidiaGPU()
+		switch {
+		case customLibPath != "":
+			gpuEP = detectGPUProvider(filepath.Dir(customLibPath), false)
+		case os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH") != "":
+			gpuEP = detectGPUProvider(filepath.Dir(os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")), false)
+		default:
+			dir, err := onnxruntime.GetInstallPath()
+			if err != nil {
+				dir = ""
+			}
+			gpuEP = detectGPUProvider(dir, true)
 		}
 	}
-	return cudaEnabled, logSeverity, customLibPath, nil
+	return gpuEP, logSeverity, customLibPath, nil
+}
+
+// detectGPUProvider auto-detects which GPU execution provider to use: "cuda" if an NVIDIA GPU
+// with CUDA libraries is present, "migraphx" if a discrete AMD GPU with MIGraphX libraries is present,
+// or "" for CPU only.
+// If dir is non-empty, it also requires the corresponding ORT provider library to be available in that directory.
+// If allowDedicatedMigraphxDir is set, an ORT library previously installed in the dedicated
+// MIGraphX directory also qualifies (so that auto-installation is never triggered implicitly
+// by auto-detection).
+func detectGPUProvider(dir string, allowDedicatedMigraphxDir bool) string {
+	if cuda.HasNvidiaGPU() && (dir == "" || cuda.IsCUDALibraryAvailable(dir)) {
+		return "cuda"
+	}
+	if rocm.HasAMDGPU() {
+		if dir == "" || rocm.IsMigraphxLibraryAvailable(dir) {
+			return "migraphx"
+		}
+		if allowDedicatedMigraphxDir {
+			if migraphxDir, err := onnxruntime.GetMigraphxInstallPath(); err == nil && rocm.IsMigraphxLibraryAvailable(migraphxDir) {
+				return "migraphx"
+			}
+		}
+	}
+	return ""
 }
 
 // New creates a new ONNX Runtime backend instance with the given configuration string.
@@ -221,36 +278,41 @@ func New(config string) (compute.Backend, error) {
 		return nil, errors.Errorf("onnxruntime backend is not supported on platform %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
-	cudaEnabled, logSeverity, customLibPath, err := parseConfig(config)
+	gpuEP, logSeverity, customLibPath, err := parseConfig(config)
 	if err != nil {
 		return nil, err
 	}
 
-	if cudaEnabled {
+	switch gpuEP {
+	case "cuda":
 		if err := cuda.CheckCUDAAndCUDNN(); err != nil {
+			return nil, err
+		}
+	case "migraphx":
+		if err := rocm.CheckROCmAndMIGraphX(); err != nil {
 			return nil, err
 		}
 	}
 
-	err = initializeORT(cudaEnabled, customLibPath)
+	err = initializeORT(gpuEP, customLibPath)
 	if err != nil {
 		return nil, err
 	}
 	return &Backend{
 		config:      config,
 		version:     ort.GetVersion(),
-		cuda:        cudaEnabled,
+		gpuEP:       gpuEP,
 		logSeverity: logSeverity,
 		hasFloat64:  true,
 		hasFloat16:  true,
-		hasBFloat16: cudaEnabled,
+		hasBFloat16: gpuEP == "cuda",
 	}, nil
 }
 
 func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape, modelProto *onnx.ModelProto) (compute.Executable, error) {
 
-	session, err := native.CreateSession(modelBytes, inputNames, outputNames, b.cuda, b.logSeverity)
+	session, err := native.CreateSession(modelBytes, inputNames, inputShapes, outputNames, b.gpuEP, b.logSeverity)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +320,7 @@ func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, input
 	if b.keepModelProto {
 		savedModelProto = modelProto
 	}
-	return native.NewExecutable(b, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto, b.cuda), nil
+	return native.NewExecutable(b, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto, b.gpuEP), nil
 }
 
 func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shape shapes.Shape) (compute.Buffer, error) {
@@ -270,7 +332,7 @@ func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shap
 }
 
 func (b *Backend) HasSharedBuffers() bool {
-	return !b.cuda
+	return b.gpuEP != "cuda"
 }
 
 func (b *Backend) NewSharedBuffer(deviceNum compute.DeviceNum, shape shapes.Shape) (compute.Buffer, any, error) {

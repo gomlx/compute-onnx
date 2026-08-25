@@ -170,3 +170,8 @@ func CopyHostToGPU(gpuValue Value, src unsafe.Pointer, byteSize int) error {
 	}
 	return CudaMemcpyH2D(dstPtr, src, byteSize)
 }
+
+// ShapeOf returns the runtime shape of the given value.
+func ShapeOf(v Value) (Shape, error) {
+	return GetOrtValueShape(v.cValue())
+}
