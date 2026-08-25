@@ -33,6 +33,9 @@ static int resolve_cuda_symbols() {
     if (resolved_cudaMemcpy == NULL || resolved_cudaDeviceSync == NULL) {
         void* lib_handle = dlopen("libcudart.so", RTLD_NOW | RTLD_GLOBAL);
         if (lib_handle == NULL) {
+            lib_handle = dlopen("libcudart.so.13", RTLD_NOW | RTLD_GLOBAL);
+        }
+        if (lib_handle == NULL) {
             lib_handle = dlopen("libcudart.so.12", RTLD_NOW | RTLD_GLOBAL);
         }
         if (lib_handle == NULL) {
