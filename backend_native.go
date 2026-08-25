@@ -152,18 +152,20 @@ func initializeORT(gpuEP string, customLibPath string) error {
 }
 
 // parseConfig parses the backend configuration string and returns the selected GPU
-// execution provider ("cuda", "migraphx", or "" for CPU), log severity, and custom ORT library path.
-func parseConfig(config string) (gpuEP string, logSeverity int, customLibPath string, err error) {
+// execution provider ("cuda", "migraphx", or "" for CPU), log severity, custom ORT library path,
+// and the MIGraphX compiled-program cache directory ("" to disable caching).
+func parseConfig(config string) (gpuEP string, logSeverity int, customLibPath string, migraphxCacheDir string, err error) {
 	gpuEP = ""
 	hasProvider := false
 	logSeverity = -1 // not set
+	migraphxCacheDir = os.Getenv("GOMLX_MIGRAPHX_CACHE_DIR")
 
 	if config == "" {
 		if envVal := os.Getenv("GOMLX_BACKEND"); envVal != "" {
 			var errEnv error
 			config, errEnv = ParseGOMLXBackendEnv(envVal)
 			if errEnv != nil {
-				return "", 0, "", errEnv
+				return "", 0, "", "", errEnv
 			}
 		}
 	} else if strings.Contains(config, ":") || strings.EqualFold(config, "onnx") || strings.EqualFold(config, "onnxruntime") {
@@ -171,7 +173,7 @@ func parseConfig(config string) (gpuEP string, logSeverity int, customLibPath st
 		if errEnv == nil {
 			config = parsed
 		} else if !isLibraryPath(config) && !strings.Contains(config, "=") {
-			return "", 0, "", errEnv
+			return "", 0, "", "", errEnv
 		}
 	}
 
@@ -179,12 +181,12 @@ func parseConfig(config string) (gpuEP string, logSeverity int, customLibPath st
 	if config == "" {
 		envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
 		if envPath != "" {
-			return detectGPUProvider(filepath.Dir(envPath), false), -1, "", nil
+			return detectGPUProvider(filepath.Dir(envPath), false), -1, "", migraphxCacheDir, nil
 		}
 		if installDir, installErr := onnxruntime.GetInstallPath(); installErr == nil {
-			return detectGPUProvider(installDir, true), -1, "", nil
+			return detectGPUProvider(installDir, true), -1, "", migraphxCacheDir, nil
 		}
-		return detectGPUProvider("", true), -1, "", nil
+		return detectGPUProvider("", true), -1, "", migraphxCacheDir, nil
 	}
 
 	parts := strings.SplitSeq(config, ",")
@@ -200,14 +202,16 @@ func parseConfig(config string) (gpuEP string, logSeverity int, customLibPath st
 			if key == "log" {
 				var level int
 				if _, err := fmt.Sscanf(val, "%d", &level); err != nil {
-					return "", 0, "", errors.Errorf("invalid log level: %q", val)
+					return "", 0, "", "", errors.Errorf("invalid log level: %q", val)
 				}
 				severity := max(3-level, 0)
 				logSeverity = severity
+			} else if key == "migraphx_cache_dir" || key == "migraphxcachedir" {
+				migraphxCacheDir = val
 			} else if key == "web_version" || key == "webversion" {
 				// Ignored on native desktop platform.
 			} else {
-				return "", 0, "", errors.Errorf("unknown config option: %q", key)
+				return "", 0, "", "", errors.Errorf("unknown config option: %q", key)
 			}
 		} else {
 			partLower := strings.ToLower(part)
@@ -225,7 +229,7 @@ func parseConfig(config string) (gpuEP string, logSeverity int, customLibPath st
 				if isLibraryPath(part) {
 					customLibPath = part
 				} else {
-					return "", 0, "", errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"migraphx\", path to ORT library, or key=value option", part)
+					return "", 0, "", "", errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"migraphx\", path to ORT library, or key=value option", part)
 				}
 			}
 		}
@@ -245,7 +249,7 @@ func parseConfig(config string) (gpuEP string, logSeverity int, customLibPath st
 			gpuEP = detectGPUProvider(dir, true)
 		}
 	}
-	return gpuEP, logSeverity, customLibPath, nil
+	return gpuEP, logSeverity, customLibPath, migraphxCacheDir, nil
 }
 
 // detectGPUProvider auto-detects which GPU execution provider to use: "cuda" if an NVIDIA GPU
@@ -278,7 +282,7 @@ func New(config string) (compute.Backend, error) {
 		return nil, errors.Errorf("onnxruntime backend is not supported on platform %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
-	gpuEP, logSeverity, customLibPath, err := parseConfig(config)
+	gpuEP, logSeverity, customLibPath, migraphxCacheDir, err := parseConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -299,20 +303,25 @@ func New(config string) (compute.Backend, error) {
 		return nil, err
 	}
 	return &Backend{
-		config:      config,
-		version:     ort.GetVersion(),
-		gpuEP:       gpuEP,
-		logSeverity: logSeverity,
-		hasFloat64:  true,
-		hasFloat16:  true,
-		hasBFloat16: gpuEP == "cuda",
+		config:           config,
+		version:          ort.GetVersion(),
+		gpuEP:            gpuEP,
+		migraphxCacheDir: migraphxCacheDir,
+		logSeverity:      logSeverity,
+		hasFloat64:       true,
+		hasFloat16:       true,
+		hasBFloat16:      gpuEP == "cuda",
 	}, nil
 }
 
 func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape, modelProto *onnx.ModelProto) (compute.Executable, error) {
 
-	session, err := native.CreateSession(modelBytes, inputNames, inputShapes, outputNames, b.gpuEP, b.logSeverity)
+	var migraphxOpts *native.MIGraphXOptions
+	if b.gpuEP == "migraphx" && b.migraphxCacheDir != "" {
+		migraphxOpts = &native.MIGraphXOptions{CacheDir: b.migraphxCacheDir}
+	}
+	session, err := native.CreateSession(modelBytes, inputNames, inputShapes, outputNames, b.gpuEP, b.logSeverity, migraphxOpts)
 	if err != nil {
 		return nil, err
 	}

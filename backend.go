@@ -33,6 +33,7 @@ type Backend struct {
 	config             string
 	version            string
 	gpuEP              string // Native GPU execution provider: "cuda", "migraphx", or "" for CPU only.
+	migraphxCacheDir   string // Native MIGraphX compiled-program cache directory ("migraphx_cache_dir" config key); empty disables caching.
 	executionProvider  string // Web execution provider (wasm/webgpu/webnn); empty on native builds.
 	webVersion         string
 	logSeverity        int

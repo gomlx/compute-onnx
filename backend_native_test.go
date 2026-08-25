@@ -86,6 +86,7 @@ func TestParseConfig(t *testing.T) {
 		wantEP            string
 		wantLog           int
 		wantCustomLibPath string
+		wantCacheDir      string
 		wantErr           bool
 	}{
 		{config: "cpu", wantEP: "", wantLog: -1, wantCustomLibPath: ""},
@@ -107,7 +108,7 @@ func TestParseConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.config, func(t *testing.T) {
-			gotEP, gotLog, gotPath, err := parseConfig(tt.config)
+			gotEP, gotLog, gotPath, gotCacheDir, err := parseConfig(tt.config)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseConfig(%q) error = %v, wantErr %v", tt.config, err, tt.wantErr)
 			}
@@ -120,6 +121,9 @@ func TestParseConfig(t *testing.T) {
 				}
 				if gotPath != tt.wantCustomLibPath {
 					t.Errorf("gotCustomLibPath = %q, want %q", gotPath, tt.wantCustomLibPath)
+				}
+				if gotCacheDir != tt.wantCacheDir {
+					t.Errorf("gotMigraphxCacheDir = %q, want %q", gotCacheDir, tt.wantCacheDir)
 				}
 			}
 		})

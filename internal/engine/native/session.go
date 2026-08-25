@@ -20,9 +20,24 @@ import (
 // that path if graph compilation / session creation fails.
 const SaveOnFailureEnv = "GOMLX_ONNX_SAVE_ON_FAILURE"
 
+// MIGraphXOptions controls optional behavior of the MIGraphX execution provider.
+type MIGraphXOptions struct {
+	// CacheDir, when non-empty, enables compiled-program caching: the
+	// MIGraphX-compiled program (.mxr) for each model is saved to this
+	// directory on first compilation and loaded from it on subsequent runs,
+	// skipping the expensive graph compilation. Entries are specific to the
+	// model, GPU and MIGraphX/ORT versions.
+	//
+	// It is implemented through the ORT_MIGRAPHX_MODEL_CACHE_PATH environment
+	// variable supported by AMD's ONNX Runtime MIGraphX builds, which avoids
+	// the ABI-fragile OrtMIGraphXProviderOptions struct.
+	CacheDir string
+}
+
 // CreateSession creates an ONNX Runtime DynamicAdvancedSession with the given options.
 // gpuEP selects the GPU execution provider: "cuda", "migraphx", or "" for CPU only.
-func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, gpuEP string, logSeverity int) (*ort.DynamicAdvancedSession, error) {
+// migraphx may be nil.
+func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, gpuEP string, logSeverity int, migraphx *MIGraphXOptions) (*ort.DynamicAdvancedSession, error) {
 	options, err := ort.NewSessionOptions()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime SessionOptions")
@@ -56,6 +71,15 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 			break
 		}
 		migraphxOpts := &ort.MIGraphXProviderOptions{DeviceID: 0}
+		if migraphx != nil && migraphx.CacheDir != "" {
+			if err := os.MkdirAll(migraphx.CacheDir, 0o755); err != nil {
+				return nil, WrapMIGraphXError(errors.Wrapf(err, "failed to create MIGraphX cache directory %q", migraphx.CacheDir))
+			}
+			if err := os.Setenv("ORT_MIGRAPHX_MODEL_CACHE_PATH", migraphx.CacheDir); err != nil {
+				return nil, WrapMIGraphXError(errors.Wrapf(err, "failed to set ORT_MIGRAPHX_MODEL_CACHE_PATH"))
+			}
+			klog.Infof("MIGraphX compiled-program caching enabled in %q", migraphx.CacheDir)
+		}
 		err := options.AppendExecutionProviderMIGraphX(migraphxOpts)
 		if err != nil {
 			return nil, WrapMIGraphXError(errors.Wrap(err, "failed to append MIGraphX execution provider to SessionOptions"))
