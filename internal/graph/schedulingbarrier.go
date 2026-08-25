@@ -12,6 +12,24 @@ import (
 
 func init() {
 	registerOp(compute.OpTypeSchedulingBarrier)
+	registerOp(compute.OpTypeOptimizationBarrier)
+}
+
+// OptimizationBarrier implements an optimization barrier.
+// In ONNX Runtime, since we do not perform graph rewriting or CSE across barriers, this acts as Identity.
+func (f *Function) OptimizationBarrier(operands ...compute.Value) ([]compute.Value, error) {
+	if len(operands) == 0 {
+		return nil, errors.New("OptimizationBarrier requires at least one operand")
+	}
+	outputs := make([]compute.Value, len(operands))
+	for i, op := range operands {
+		id, err := f.Identity(op)
+		if err != nil {
+			return nil, err
+		}
+		outputs[i] = id
+	}
+	return outputs, nil
 }
 
 // SchedulingBarrier introduces a scheduling barrier.
