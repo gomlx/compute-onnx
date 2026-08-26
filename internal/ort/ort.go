@@ -103,12 +103,12 @@ func GetVersion() string {
 	return ortVersion
 }
 
-// OrtAPI versions: the vendored header supports up to maxOrtAPIVersion, but some ONNX Runtime
+// ORT API versions: the vendored header supports up to maxAPIVersion, but some ONNX Runtime
 // builds expose a lower maximum — e.g. AMD's ROCm/MIGraphX wheels are based on ORT v1.23 (API version 23).
 // We negotiate the highest mutually supported version.
 const (
-	maxOrtAPIVersion = 26
-	minOrtAPIVersion = 17 // minimum needed for SessionOptionsAppendExecutionProvider_CUDA_V2
+	maxAPIVersion = 26
+	minAPIVersion = 17 // minimum needed for SessionOptionsAppendExecutionProvider_CUDA_V2
 )
 
 func InitializeEnvironment() error {
@@ -136,14 +136,14 @@ func InitializeEnvironment() error {
 		ortVersion = C.GoString(cVersion)
 	}
 
-	for version := uint32(maxOrtAPIVersion); ; version-- {
+	for version := uint32(maxAPIVersion); ; version-- {
 		ortApi = (*C.OrtApi)(C.GetOrtApi(apiBasePtr, C.uint32_t(version)))
 		if ortApi != nil {
 			break
 		}
-		if version <= minOrtAPIVersion {
+		if version <= minAPIVersion {
 			_ = closeLibrary(handle)
-			return fmt.Errorf("failed to get an ONNX Runtime API between versions %d and %d", minOrtAPIVersion, maxOrtAPIVersion)
+			return fmt.Errorf("failed to get an ONNX Runtime API between versions %d and %d", minAPIVersion, maxAPIVersion)
 		}
 	}
 
@@ -680,8 +680,6 @@ func NewEmptyTensor[T TensorData](shape Shape) (*Tensor[T], error) {
 		shape: shape,
 	}, nil
 }
-
-
 
 func (s *Session) Run(inputNames []string, inputValues []Value, outputNames []string, outputValues []Value) error {
 	arena := GetArena(8192)

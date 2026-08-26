@@ -79,7 +79,7 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 			if err := os.Setenv("ORT_MIGRAPHX_MODEL_CACHE_PATH", migraphx.CacheDir); err != nil {
 				return nil, WrapMIGraphXError(errors.Wrapf(err, "failed to set ORT_MIGRAPHX_MODEL_CACHE_PATH"))
 			}
-			klog.Infof("MIGraphX compiled-program caching enabled in %q", migraphx.CacheDir)
+			klog.V(1).Infof("MIGraphX compiled-program caching enabled in %q", migraphx.CacheDir)
 		}
 		err := options.AppendExecutionProviderMIGraphX(migraphxOpts)
 		if err != nil {
@@ -116,7 +116,7 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 			strings.Contains(errStr, "Could not find an implementation") {
 			return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support operation: %s", errStr)
 		}
-		return nil, WrapGPUError(errors.Wrap(err, "failed to create ONNX Runtime session"))
+		return nil, WrapEPError(gpuEP, errors.Wrap(err, "failed to create ONNX Runtime session"))
 	}
 
 	return session, nil
@@ -146,9 +146,20 @@ func WrapCUDAError(err error) error {
 	return err
 }
 
-// WrapGPUError dispatches to provider-specific error wrappers based on the error content.
-func WrapGPUError(err error) error {
-	return WrapMIGraphXError(WrapCUDAError(err))
+// WrapEPError dispatches to the provider-specific error wrapper for the given
+// execution provider, adding helpful troubleshooting messages to known errors.
+func WrapEPError(ep executionprovider.ExecutionProviderType, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch ep {
+	case executionprovider.ExecutionProviderCUDA:
+		return WrapCUDAError(err)
+	case executionprovider.ExecutionProviderMIGraphX:
+		return WrapMIGraphXError(err)
+	default:
+		return err
+	}
 }
 
 // WrapMIGraphXError adds helpful troubleshooting messages to known MIGraphX / ORT initialization errors.

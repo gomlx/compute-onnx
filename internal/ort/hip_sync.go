@@ -43,8 +43,9 @@ static int hip_device_synchronize() {
 */
 import "C"
 import (
-	"fmt"
 	"runtime"
+
+	"github.com/pkg/errors"
 )
 
 // HipDeviceSynchronize blocks until all pending HIP device work has completed.
@@ -55,15 +56,16 @@ func HipDeviceSynchronize() error {
 	defer runtime.UnlockOSThread()
 	ret := C.hip_device_synchronize()
 	if ret < 0 {
-		return fmt.Errorf("hipDeviceSynchronize could not be resolved from the HIP runtime (libamdhip64)")
+		return errors.Errorf("hipDeviceSynchronize could not be resolved from the HIP runtime (libamdhip64)")
 	}
 	if ret != 0 {
-		return fmt.Errorf("hipDeviceSynchronize failed with error code %d", int(ret))
+		return errors.Errorf("hipDeviceSynchronize failed with error code %d", int(ret))
 	}
 	return nil
 }
 
-// HasHIPLibrary returns whether the HIP runtime could be resolved in this process.
-func HasHIPLibrary() bool {
+// LoadHIPLibrary resolves and dynamically loads the HIP runtime (libamdhip64),
+// returning whether hipDeviceSynchronize could be resolved in this process.
+func LoadHIPLibrary() bool {
 	return C.resolve_hip_sync_symbol() == 0
 }
