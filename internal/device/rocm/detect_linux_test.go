@@ -80,9 +80,9 @@ func TestRocminfoField(t *testing.T) {
 	}
 }
 
-func TestIsMigraphxLibraryAvailable(t *testing.T) {
+func TestHasMigraphxExecutionProvider(t *testing.T) {
 	dir := t.TempDir()
-	if IsMigraphxLibraryAvailable(dir) {
+	if HasMigraphxExecutionProvider(dir) {
 		t.Errorf("expected empty directory to not have migraphx provider library")
 	}
 	f, err := os.Create(filepath.Join(dir, "libonnxruntime_providers_migraphx.so"))
@@ -90,7 +90,7 @@ func TestIsMigraphxLibraryAvailable(t *testing.T) {
 		t.Fatalf("failed to create fake provider library: %+v", err)
 	}
 	f.Close()
-	if !IsMigraphxLibraryAvailable(dir) {
+	if !HasMigraphxExecutionProvider(dir) {
 		t.Errorf("expected directory with libonnxruntime_providers_migraphx.so to be detected")
 	}
 }

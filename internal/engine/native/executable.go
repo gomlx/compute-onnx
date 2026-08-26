@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
@@ -23,7 +24,7 @@ import (
 	"unsafe"
 )
 
-// migraphxMaxWarmUpRuns caps the number of per-shape warm-up runs (see executeCPU).
+// migraphxMaxWarmUpRuns caps the number of per-shape warm-up runs (see migraphxWorkaround).
 const migraphxMaxWarmUpRuns = 8
 
 // Executable implements [compute.Executable] for ONNX Runtime native execution (CPU & CUDA).
@@ -35,10 +36,10 @@ type Executable struct {
 	outputNames      []string
 	outputShapes     []shapes.Shape
 	reusableWrappers []OrtTensorWrapper
-	gpuEP            string // GPU execution provider: "cuda", "migraphx", or "" for CPU only.
+	gpuEP            executionprovider.ExecutionProviderType // GPU execution provider: CUDA, MIGraphX, or CPU only.
 
 	// warmedShapes tracks which input-shape signatures have already been through the
-	// MIGraphX first-eval warm-up (see executeCPU). Only used when gpuEP == "migraphx".
+	// MIGraphX first-eval warm-up (see migraphxWorkaround). Only used when gpuEP == MIGraphX.
 	warmedShapes map[string]bool
 
 	// Pre-allocated slices reused across Execute calls (CPU path only, single-threaded).
@@ -55,11 +56,11 @@ type Executable struct {
 var _ compute.Executable = (*Executable)(nil)
 
 // NewExecutable creates a new Native Executable.
-// gpuEP is the GPU execution provider used by the session: "cuda", "migraphx", or "" for CPU only.
+// gpuEP is the GPU execution provider used by the session: CUDA, MIGraphX, or CPU only.
 func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 	inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape,
-	modelProto *onnx.ModelProto, gpuEP string) *Executable {
+	modelProto *onnx.ModelProto, gpuEP executionprovider.ExecutionProviderType) *Executable {
 
 	nInputs := len(inputNames)
 	nOutputs := len(outputShapes)
@@ -77,7 +78,7 @@ func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 		modelProto:       modelProto,
 		gpuEP:            gpuEP,
 	}
-	if gpuEP == "migraphx" {
+	if gpuEP == executionprovider.ExecutionProviderMIGraphX {
 		e.warmedShapes = make(map[string]bool)
 	}
 	runtime.SetFinalizer(e, (*Executable).Finalize)
@@ -187,7 +188,7 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 	}
 
 	defer runtime.KeepAlive(inputs)
-	if e.gpuEP == "cuda" {
+	if e.gpuEP == executionprovider.ExecutionProviderCUDA {
 		// CUDA path: outputs are bound to device memory and stay GPU-resident.
 		ortInputs := make([]ort.Value, len(e.inputNames))
 		var dummyWrapper OrtTensorWrapper
@@ -248,7 +249,7 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 		}()
 	}
 
-	return e.executeCPU(inputs, donate, defaultDevice)
+	return e.executeDefault(inputs, donate, defaultDevice)
 }
 
 func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
@@ -341,14 +342,16 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 	return outBuffers, nil
 }
 
-func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
+// executeDefault executes the compiled graph for any non-specialized execution provider
+// (CPU and MIGraphX), using caller-preallocated or ONNX Runtime-allocated output buffers.
+func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
 	outWrappers := e.cachedOutWraps
 	ortOutputs := e.cachedOrtOutputs
 
 	// The MIGraphX EP unreliably copies results into caller-preallocated (CPU) output
 	// buffers, so for it we let ONNX Runtime allocate the outputs instead and wrap
 	// them afterwards -- the same thing already done for dynamic shapes.
-	preallocOutputs := e.gpuEP != "migraphx"
+	preallocOutputs := e.gpuEP != executionprovider.ExecutionProviderMIGraphX
 
 	for i, sh := range e.outputShapes {
 		if sh.IsDynamic() || !preallocOutputs {
@@ -405,67 +408,13 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	if e.gpuEP == "migraphx" {
-		// Upstream MIGraphX bug workaround: the first evaluations for each distinct
-		// input-shape signature return uninitialized/garbage outputs (the number of
-		// affected runs varies with the model). Detect new shapes here and repeat the
-		// run until the outputs stabilize, discarding all results.
-		key := inputShapeSignature(e.cachedOrtInputs)
-		if !e.warmedShapes[key] {
-			var prevBytes [][]byte
-			for i := 0; i < migraphxMaxWarmUpRuns; i++ {
-				dummyOutputs := make([]ort.Value, len(e.outputShapes))
-				if err := e.session.Run(e.cachedOrtInputs, dummyOutputs); err != nil {
-					return nil, errors.Wrap(err, "migraphx warm-up run failed")
-				}
-				curBytes := make([][]byte, len(dummyOutputs))
-				for j, o := range dummyOutputs {
-					if o == nil {
-						continue
-					}
-					if ptr, err := o.GetTensorMutableData(); err == nil {
-						shape := e.outputShapes[j]
-						if rtShape, serr := ort.ShapeOf(o); serr == nil && len(rtShape) > 0 {
-							numel := int64(1)
-							for _, d := range rtShape {
-								if d > 0 {
-									numel *= d
-								}
-							}
-							shape = shapes.Make(e.outputShapes[j].DType, int(numel))
-						}
-						size := shape.Size() * shape.DType.Size()
-						curBytes[j] = unsafe.Slice((*byte)(ptr), max(size, 1))
-					}
-					_ = o.Destroy()
-				}
-				if err := ort.HipDeviceSynchronize(); err != nil {
-					return nil, errors.Wrap(err, "migraphx warm-up synchronization failed")
-				}
-				stable := len(prevBytes) > 0 && len(prevBytes) == len(curBytes)
-				for j := range curBytes {
-					if !stable {
-						break
-					}
-					if !bytes.Equal(curBytes[j], prevBytes[j]) {
-						stable = false
-					}
-				}
-				prevBytes = curBytes
-				if stable {
-					break
-				}
-			}
-			e.warmedShapes[key] = true
+	if e.gpuEP == executionprovider.ExecutionProviderMIGraphX {
+		if err := e.migraphxWorkaround(); err != nil {
+			return nil, err
 		}
 	}
 
 	err := e.session.Run(e.cachedOrtInputs, ortOutputs)
-	if err == nil && e.gpuEP == "migraphx" {
-		// The MIGraphX EP leaves GPU work in flight; synchronize so that output
-		// buffers (and inputs of the next execution) are fully materialized.
-		err = ort.HipDeviceSynchronize()
-	}
 	if klog.V(1).Enabled() {
 		klog.Infof("Execution (CPU) elapsed time: %s\n", humanize.Duration(time.Since(start)))
 	}
@@ -476,6 +425,18 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 			}
 		}
 		return nil, errors.Wrap(err, "onnxruntime execution failed")
+	}
+	if e.gpuEP == executionprovider.ExecutionProviderMIGraphX {
+		// The MIGraphX EP leaves GPU work in flight; synchronize so that output
+		// buffers (and inputs of the next execution) are fully materialized.
+		if err := ort.HipDeviceSynchronize(); err != nil {
+			for _, w := range outWrappers {
+				if w != nil {
+					_ = w.Destroy()
+				}
+			}
+			return nil, errors.Wrap(err, "onnxruntime execution failed")
+		}
 	}
 
 	outBuffers := make([]compute.Buffer, len(e.outputShapes))
@@ -496,7 +457,7 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 		}
 
 		execBackpointer := e
-		if e.gpuEP == "cuda" {
+		if e.gpuEP == executionprovider.ExecutionProviderCUDA {
 			// CUDA buffers are never recycled via the executable.
 			execBackpointer = nil
 		}
@@ -524,6 +485,63 @@ func (e *Executable) executeCPU(inputs []compute.Buffer, donate []bool, defaultD
 	}
 
 	return outBuffers, nil
+}
+
+// migraphxWorkaround implements the upstream MIGraphX bug workaround: the first
+// evaluations for each distinct input-shape signature return uninitialized/garbage
+// outputs (the number of affected runs varies with the model). It detects new shapes
+// and repeats the run until the outputs stabilize, discarding all results.
+func (e *Executable) migraphxWorkaround() error {
+	key := inputShapeSignature(e.cachedOrtInputs)
+	if e.warmedShapes[key] {
+		return nil
+	}
+	var prevBytes [][]byte
+	for i := 0; i < migraphxMaxWarmUpRuns; i++ {
+		dummyOutputs := make([]ort.Value, len(e.outputShapes))
+		if err := e.session.Run(e.cachedOrtInputs, dummyOutputs); err != nil {
+			return errors.Wrap(err, "migraphx warm-up run failed")
+		}
+		curBytes := make([][]byte, len(dummyOutputs))
+		for j, o := range dummyOutputs {
+			if o == nil {
+				continue
+			}
+			if ptr, err := o.GetTensorMutableData(); err == nil {
+				shape := e.outputShapes[j]
+				if rtShape, serr := ort.ShapeOf(o); serr == nil && len(rtShape) > 0 {
+					numel := int64(1)
+					for _, d := range rtShape {
+						if d > 0 {
+							numel *= d
+						}
+					}
+					shape = shapes.Make(e.outputShapes[j].DType, int(numel))
+				}
+				size := shape.Size() * shape.DType.Size()
+				curBytes[j] = unsafe.Slice((*byte)(ptr), max(size, 1))
+			}
+			_ = o.Destroy()
+		}
+		if err := ort.HipDeviceSynchronize(); err != nil {
+			return errors.Wrap(err, "migraphx warm-up synchronization failed")
+		}
+		stable := len(prevBytes) > 0 && len(prevBytes) == len(curBytes)
+		for j := range curBytes {
+			if !stable {
+				break
+			}
+			if !bytes.Equal(curBytes[j], prevBytes[j]) {
+				stable = false
+			}
+		}
+		prevBytes = curBytes
+		if stable {
+			break
+		}
+	}
+	e.warmedShapes[key] = true
+	return nil
 }
 
 // inputShapeSignature returns a stable string key for the shapes of the given input values.

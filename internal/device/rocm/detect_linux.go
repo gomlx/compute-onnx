@@ -201,8 +201,8 @@ func librarySearchPaths() []string {
 	return dirs
 }
 
-// IsMigraphxLibraryAvailable checks if an ONNX Runtime MIGraphX provider shared library is present in the directory.
-func IsMigraphxLibraryAvailable(dir string) bool {
+// HasMigraphxExecutionProvider checks if an ONNX Runtime MIGraphX provider shared library is present in the directory.
+func HasMigraphxExecutionProvider(dir string) bool {
 	if _, err := os.Stat(filepath.Join(dir, "libonnxruntime_providers_migraphx.so")); err == nil {
 		return true
 	}

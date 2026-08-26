@@ -13,6 +13,7 @@ import (
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/device/cuda"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 	"github.com/gomlx/compute/support/backendtest"
@@ -83,26 +84,26 @@ func TestParseConfig(t *testing.T) {
 
 	tests := []struct {
 		config            string
-		wantEP            string
+		wantEP            executionprovider.ExecutionProviderType
 		wantLog           int
 		wantCustomLibPath string
 		wantCacheDir      string
 		wantErr           bool
 	}{
-		{config: "cpu", wantEP: "", wantLog: -1, wantCustomLibPath: ""},
-		{config: "cuda", wantEP: "cuda", wantLog: -1, wantCustomLibPath: ""},
-		{config: "cuda,log=2", wantEP: "cuda", wantLog: 1, wantCustomLibPath: ""},
-		{config: "onnx:cpu", wantEP: "", wantLog: -1, wantCustomLibPath: ""},
-		{config: "onnxruntime:cuda", wantEP: "cuda", wantLog: -1, wantCustomLibPath: ""},
-		{config: "onnx:cuda,log=2", wantEP: "cuda", wantLog: 1, wantCustomLibPath: ""},
-		{config: "migraphx", wantEP: "migraphx", wantLog: -1, wantCustomLibPath: ""},
-		{config: "rocm", wantEP: "migraphx", wantLog: -1, wantCustomLibPath: ""},
-		{config: "amd,log=0", wantEP: "migraphx", wantLog: 3, wantCustomLibPath: ""},
+		{config: "cpu", wantEP: executionprovider.ExecutionProviderCPU, wantLog: -1, wantCustomLibPath: ""},
+		{config: "cuda", wantEP: executionprovider.ExecutionProviderCUDA, wantLog: -1, wantCustomLibPath: ""},
+		{config: "cuda,log=2", wantEP: executionprovider.ExecutionProviderCUDA, wantLog: 1, wantCustomLibPath: ""},
+		{config: "onnx:cpu", wantEP: executionprovider.ExecutionProviderCPU, wantLog: -1, wantCustomLibPath: ""},
+		{config: "onnxruntime:cuda", wantEP: executionprovider.ExecutionProviderCUDA, wantLog: -1, wantCustomLibPath: ""},
+		{config: "onnx:cuda,log=2", wantEP: executionprovider.ExecutionProviderCUDA, wantLog: 1, wantCustomLibPath: ""},
+		{config: "migraphx", wantEP: executionprovider.ExecutionProviderMIGraphX, wantLog: -1, wantCustomLibPath: ""},
+		{config: "rocm", wantEP: executionprovider.ExecutionProviderMIGraphX, wantLog: -1, wantCustomLibPath: ""},
+		{config: "amd,log=0", wantEP: executionprovider.ExecutionProviderMIGraphX, wantLog: 3, wantCustomLibPath: ""},
 		{config: "openxla:cuda", wantErr: true},
-		{config: cpuLibPath, wantEP: "", wantLog: -1, wantCustomLibPath: cpuLibPath},
+		{config: cpuLibPath, wantEP: executionprovider.ExecutionProviderCPU, wantLog: -1, wantCustomLibPath: cpuLibPath},
 		// Auto-detection with a custom lib path depends on the GPUs present:
 		{config: cudaLibPath, wantEP: autoDetectedEP(cudaDir), wantLog: -1, wantCustomLibPath: cudaLibPath},
-		{config: "cuda," + cpuLibPath, wantEP: "cuda", wantLog: -1, wantCustomLibPath: cpuLibPath},
+		{config: "cuda," + cpuLibPath, wantEP: executionprovider.ExecutionProviderCUDA, wantLog: -1, wantCustomLibPath: cpuLibPath},
 		{config: "invalid_option_xyz", wantErr: true},
 	}
 
@@ -114,7 +115,7 @@ func TestParseConfig(t *testing.T) {
 			}
 			if !tt.wantErr {
 				if gotEP != tt.wantEP {
-					t.Errorf("got gpuEP = %q, want %q", gotEP, tt.wantEP)
+					t.Errorf("got gpuEP = %v, want %v", gotEP, tt.wantEP)
 				}
 				if gotLog != tt.wantLog {
 					t.Errorf("gotLog = %v, want %v", gotLog, tt.wantLog)
@@ -132,11 +133,11 @@ func TestParseConfig(t *testing.T) {
 
 // autoDetectedEP returns the expected GPU EP when no explicit provider token is given,
 // given a directory that contains a fake CUDA provider library.
-func autoDetectedEP(dir string) string {
+func autoDetectedEP(dir string) executionprovider.ExecutionProviderType {
 	if cuda.HasNvidiaGPU() && cuda.IsCUDALibraryAvailable(dir) {
-		return "cuda"
+		return executionprovider.ExecutionProviderCUDA
 	}
-	return ""
+	return executionprovider.ExecutionProviderCPU
 }
 
 func TestEnableAutoInstall(t *testing.T) {
@@ -165,7 +166,7 @@ func TestExplicitPathNoAutoInstall(t *testing.T) {
 	EnableAutoInstall(true)
 	nonExistentPath := filepath.Join(t.TempDir(), "nonexistent_libonnxruntime.so")
 
-	err := initializeORT("", nonExistentPath)
+	err := initializeORT(executionprovider.ExecutionProviderCPU, nonExistentPath)
 	if err == nil {
 		t.Fatal("expected error when explicit path does not exist, got nil")
 	}

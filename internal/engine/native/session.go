@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
@@ -35,9 +36,9 @@ type MIGraphXOptions struct {
 }
 
 // CreateSession creates an ONNX Runtime DynamicAdvancedSession with the given options.
-// gpuEP selects the GPU execution provider: "cuda", "migraphx", or "" for CPU only.
+// gpuEP selects the GPU execution provider: CUDA, MIGraphX, or CPU only.
 // migraphx may be nil.
-func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, gpuEP string, logSeverity int, migraphx *MIGraphXOptions) (*ort.DynamicAdvancedSession, error) {
+func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, gpuEP executionprovider.ExecutionProviderType, logSeverity int, migraphx *MIGraphXOptions) (*ort.DynamicAdvancedSession, error) {
 	options, err := ort.NewSessionOptions()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime SessionOptions")
@@ -45,7 +46,7 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 	defer options.Destroy()
 
 	switch gpuEP {
-	case "cuda":
+	case executionprovider.ExecutionProviderCUDA:
 		cudaOpts, err := ort.NewCUDAProviderOptions()
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to create ONNX Runtime CUDAProviderOptions")
@@ -61,7 +62,7 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 			return nil, WrapCUDAError(errors.Wrap(err, "failed to append CUDA execution provider to SessionOptions"))
 		}
 
-	case "migraphx":
+	case executionprovider.ExecutionProviderMIGraphX:
 		// Upstream MIGraphX bug workaround: evaluating a program with scalar
 		// (0-dimensional) inputs aborts inside migraphx::program::eval
 		// ("contexts.size() == 1" assertion). Such models fall back to CPU execution.
@@ -84,7 +85,7 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 		if err != nil {
 			return nil, WrapMIGraphXError(errors.Wrap(err, "failed to append MIGraphX execution provider to SessionOptions"))
 		}
-	case "":
+	case executionprovider.ExecutionProviderCPU:
 		// CPU only.
 
 	default:

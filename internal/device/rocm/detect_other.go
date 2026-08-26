@@ -24,7 +24,7 @@ func GetROCMDirectory() string {
 	return ""
 }
 
-// IsMigraphxLibraryAvailable always returns false on non-Linux platforms.
-func IsMigraphxLibraryAvailable(dir string) bool {
+// HasMigraphxExecutionProvider always returns false on non-Linux platforms.
+func HasMigraphxExecutionProvider(dir string) bool {
 	return false
 }
