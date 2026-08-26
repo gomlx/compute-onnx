@@ -81,6 +81,13 @@ The backend automatically locates or manages the required ONNX Runtime shared li
 - **Auto-Installation**: If no library path is provided, the backend automatically downloads and extracts prebuilt official ONNX Runtime binaries locally (e.g. `~/.local/lib/onnxruntime/` on Linux).
 - **Disabling Auto-Installation**: Set the environment variable `GOMLX_NO_AUTO_INSTALL=1` or call `onnxbackend.EnableAutoInstall(false)` programmatically to disable automatic downloads (useful for offline environments or container deployments).
 
+## AMD ROCm / MIGraphX Environment Variables
+
+The MIGraphX execution provider relies on a local ROCm installation:
+
+- **`ROCM_PATH`**: Directory where ROCm is installed (defaults to `/opt/rocm`). It is used to locate `rocminfo` and the HIP/MIGraphX libraries when auto-detecting an AMD GPU and its ROCm version.
+- **`GOMLX_MIGRAPHX_CACHE_DIR`**: Directory where the MIGraphX compiled-program (`.mxr`) for each model is cached, skipping the expensive graph compilation on subsequent runs. Equivalent to the `migraphx_cache_dir` config key (e.g. `GOMLX_BACKEND=onnx:migraphx,migraphx_cache_dir=/tmp/mxr`); an empty value disables caching.
+
 ## Debugging
 
 ### Saving Failed Models (`GOMLX_ONNX_SAVE_ON_FAILURE`)
