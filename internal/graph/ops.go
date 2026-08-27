@@ -93,6 +93,7 @@ func init() {
 	registerOp(compute.OpTypeReverse)
 	registerOp(compute.OpTypeTranspose)
 	registerOp(compute.OpTypeBroadcastInDim)
+	registerOp(compute.OpTypeDynamicBroadcastInDim)
 	registerOp(compute.OpTypeConcatenate)
 	registerOp(compute.OpTypeSlice)
 	registerOp(compute.OpTypeDynamicSlice)

@@ -172,6 +172,69 @@ func TestDynamicOps(t *testing.T) {
 		}
 	})
 
+	t.Run("DynamicBroadcastInDim", func(t *testing.T) {
+		builder := backend.Builder("test_dyn_broadcast")
+		mainFn := builder.Main().(*Function)
+
+		paramShape := shapes.MakeDynamic(dtypes.Float32, []int{shapes.DynamicDim, 1}, []string{"batch", ""})
+		x, err := mainFn.Parameter("x", paramShape, nil)
+		if err != nil {
+			t.Fatalf("Parameter failed: %v", err)
+		}
+
+		batchSize, err := mainFn.DynamicDimensionSize(x, 0)
+		if err != nil {
+			t.Fatalf("DynamicDimensionSize failed: %v", err)
+		}
+
+		c, err := mainFn.Constant([]float32{10, 20, 30}, 1, 3)
+		if err != nil {
+			t.Fatalf("Constant failed: %v", err)
+		}
+
+		broadcasted, err := mainFn.DynamicBroadcastInDim(c, []int{0, 1},
+			compute.DynamicDimensionSpec{Name: "batch", Value: batchSize},
+			compute.DynamicDimensionSpec{Static: 3},
+		)
+		if err != nil {
+			t.Fatalf("DynamicBroadcastInDim failed: %v", err)
+		}
+
+		err = mainFn.Return([]compute.Value{broadcasted}, nil)
+		if err != nil {
+			t.Fatalf("Return failed: %v", err)
+		}
+
+		exec, err := builder.Compile()
+		if err != nil {
+			t.Fatalf("Compile failed: %v", err)
+		}
+		defer exec.Finalize()
+
+		inBuf, err := backend.BufferFromFlatData(0, []float32{1, 2}, shapes.Make(dtypes.Float32, 2, 1))
+		if err != nil {
+			t.Fatalf("BufferFromFlatData failed: %v", err)
+		}
+		defer inBuf.Finalize()
+
+		outputs, err := exec.Execute([]compute.Buffer{inBuf}, []bool{false}, 0)
+		if err != nil {
+			t.Fatalf("Execute failed: %v", err)
+		}
+		if len(outputs) != 1 {
+			t.Fatalf("expected 1 output, got %d", len(outputs))
+		}
+
+		outData := make([]float32, 6)
+		if err := outputs[0].ToFlatData(outData); err != nil {
+			t.Fatalf("ToFlatData failed: %v", err)
+		}
+		wantData := []float32{10, 20, 30, 10, 20, 30}
+		if !slices.Equal(outData, wantData) {
+			t.Fatalf("expected outData %v, got %v", wantData, outData)
+		}
+	})
+
 	t.Run("ConstantCaching", func(t *testing.T) {
 		builder := backend.Builder("test_const_cache")
 		fn := builder.Main().(*Function)

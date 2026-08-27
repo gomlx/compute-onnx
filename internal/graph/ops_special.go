@@ -581,6 +581,147 @@ func (f *Function) DynamicReshape(operand compute.Value, dimensions ...compute.D
 	return f.addNode(node), nil
 }
 
+func (f *Function) DynamicBroadcastInDim(operand compute.Value, broadcastAxes []int, dimensions ...compute.DynamicDimensionSpec) (compute.Value, error) {
+	xNode, ok := operand.(*Node)
+	if !ok {
+		return nil, errors.New("input must be a valid onnxruntime node")
+	}
+
+	outShape, err := shapeinference.DynamicBroadcastInDim(xNode.shape, broadcastAxes, dimensions, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	outputRank := len(dimensions)
+	var reshaped compute.Value
+	if xNode.shape.IsDynamic() {
+		reshapeSpecs := make([]compute.DynamicDimensionSpec, outputRank)
+		for i := range reshapeSpecs {
+			reshapeSpecs[i] = compute.DynamicDimensionSpec{Static: 1}
+		}
+		for operandAxis, outputAxis := range broadcastAxes {
+			dim := xNode.shape.Dimensions[operandAxis]
+			name := xNode.shape.AxisName(operandAxis)
+			if dim == shapes.DynamicDim {
+				dimVal, err := f.DynamicDimensionSize(xNode, operandAxis)
+				if err != nil {
+					return nil, err
+				}
+				reshapeSpecs[outputAxis] = compute.DynamicDimensionSpec{
+					Name:  name,
+					Value: dimVal,
+				}
+			} else {
+				reshapeSpecs[outputAxis] = compute.DynamicDimensionSpec{Static: dim}
+			}
+		}
+		reshaped, err = f.DynamicReshape(xNode, reshapeSpecs...)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		reshapeDims := make([]int, outputRank)
+		for i := range reshapeDims {
+			reshapeDims[i] = 1
+		}
+		for operandAxis, outputAxis := range broadcastAxes {
+			reshapeDims[outputAxis] = xNode.shape.Dimensions[operandAxis]
+		}
+		reshaped, err = f.Reshape(xNode, reshapeDims...)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	parts := make([]compute.Value, outputRank)
+	for i, spec := range dimensions {
+		if spec.Value != nil {
+			valNode, ok := spec.Value.(*Node)
+			if !ok {
+				return nil, errors.New("dimension spec Value is not a valid onnxruntime node")
+			}
+			v := compute.Value(valNode)
+			if valNode.shape.Rank() == 0 {
+				var err error
+				v, err = f.Reshape(v, 1)
+				if err != nil {
+					return nil, err
+				}
+			}
+			currNode := v.(*Node)
+			if currNode.shape.DType != dtypes.Int64 {
+				var err error
+				v, err = f.ConvertDType(v, dtypes.Int64)
+				if err != nil {
+					return nil, err
+				}
+			}
+			parts[i] = v
+		} else if spec.Name != "" {
+			matched := false
+			for operandAxis, outputAxis := range broadcastAxes {
+				if outputAxis == i {
+					dimVal, err := f.DynamicDimensionSize(xNode, operandAxis)
+					if err != nil {
+						return nil, err
+					}
+					dimVal64, err := f.ConvertDType(dimVal, dtypes.Int64)
+					if err != nil {
+						return nil, err
+					}
+					parts[i], err = f.Reshape(dimVal64, 1)
+					if err != nil {
+						return nil, err
+					}
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				constNode, err := f.Constant([]int64{1}, 1)
+				if err != nil {
+					return nil, err
+				}
+				parts[i] = constNode
+			}
+		} else {
+			constNode, err := f.Constant([]int64{int64(spec.Static)}, 1)
+			if err != nil {
+				return nil, err
+			}
+			parts[i] = constNode
+		}
+	}
+
+	var shapeTensorNode compute.Value
+	if len(parts) == 1 {
+		shapeTensorNode = parts[0]
+	} else {
+		var err error
+		shapeTensorNode, err = f.Concatenate(0, parts...)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	shapeNode, ok := shapeTensorNode.(*Node)
+	if !ok {
+		return nil, errors.New("shape tensor is not a valid onnxruntime node")
+	}
+
+	reshapedNode, ok := reshaped.(*Node)
+	if !ok {
+		return nil, errors.New("reshaped is not a valid onnxruntime node")
+	}
+
+	node := &Node{
+		opType: "Expand",
+		inputs: []*Node{reshapedNode, shapeNode},
+		shape:  outShape,
+	}
+	return f.addNode(node), nil
+}
+
 func (f *Function) DynamicSlice(operand compute.Value, startIndices []compute.Value, sliceDims []int) (compute.Value, error) {
 	opNode, ok := operand.(*Node)
 	if !ok {
