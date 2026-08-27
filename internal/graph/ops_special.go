@@ -1043,3 +1043,74 @@ func (f *Function) Pad(x, fillValue compute.Value, axesConfig ...compute.PadAxis
 	}
 	return f.addNode(padNode), nil
 }
+
+// CumSum implements the ONNX CumSum operation.
+func (f *Function) CumSum(operand compute.Value, axis int, options compute.CumSumOptions) (compute.Value, error) {
+	xNode, ok := operand.(*Node)
+	if !ok {
+		return nil, errors.New("CumSum: operand must be a valid onnxruntime node")
+	}
+
+	outShape, err := shapeinference.CumSum(xNode.shape, axis)
+	if err != nil {
+		return nil, err
+	}
+
+	originalDType := xNode.shape.DType
+	needCast := originalDType == dtypes.BFloat16
+	var cumSumInput *Node
+	if needCast {
+		castInput, err := f.ConvertDType(xNode, dtypes.Float32)
+		if err != nil {
+			return nil, err
+		}
+		cumSumInput = castInput.(*Node)
+	} else {
+		cumSumInput = xNode
+	}
+
+	axisConst, err := f.Constant([]int64{int64(axis)})
+	if err != nil {
+		return nil, err
+	}
+
+	exclusiveVal := int64(0)
+	if options.Exclusive {
+		exclusiveVal = 1
+	}
+	reverseVal := int64(0)
+	if options.Reverse {
+		reverseVal = 1
+	}
+
+	node := &Node{
+		opType: "CumSum",
+		inputs: []*Node{cumSumInput, axisConst.(*Node)},
+		shape:  cumSumInput.shape.Clone(),
+		attributes: []*onnx.AttributeProto{
+			{
+				Name: "exclusive",
+				Type: onnx.AttributeProto_INT,
+				I:    exclusiveVal,
+			},
+			{
+				Name: "reverse",
+				Type: onnx.AttributeProto_INT,
+				I:    reverseVal,
+			},
+		},
+	}
+	resNode := f.addNode(node)
+	if needCast {
+		castBack, err := f.ConvertDType(resNode, originalDType)
+		if err != nil {
+			return nil, err
+		}
+		resCast := castBack.(*Node)
+		resCast.shape = outShape
+		return resCast, nil
+	}
+	resNode.shape = outShape
+	return resNode, nil
+}
+
