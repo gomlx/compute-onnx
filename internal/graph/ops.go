@@ -99,7 +99,9 @@ func init() {
 	registerOp(compute.OpTypeDynamicSlice)
 	registerOp(compute.OpTypeDynamicUpdateSlice)
 	registerOp(compute.OpTypePad)
+	registerOp(compute.OpTypeDynamicPad)
 	registerOp(compute.OpTypeIota)
+	registerOp(compute.OpTypeDynamicIota)
 	registerOp(compute.OpTypeCumSum)
 
 	// Reductions

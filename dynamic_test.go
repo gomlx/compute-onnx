@@ -335,4 +335,124 @@ func TestDynamicOps(t *testing.T) {
 			t.Fatalf("expected res [2 4 6 8 10 12], got %v", res)
 		}
 	})
+
+	t.Run("DynamicIota", func(t *testing.T) {
+		builder := backend.Builder("test_dynamic_iota")
+		mainFn := builder.Main()
+
+		batchParam, err := mainFn.Parameter("batch", shapes.Make(dtypes.Int32), nil)
+		if err != nil {
+			t.Fatalf("Parameter failed: %v", err)
+		}
+
+		iotaVal, err := mainFn.DynamicIota(dtypes.Int32, 1,
+			compute.DynamicDimensionSpec{Name: "batch", Value: batchParam},
+			compute.DynamicDimensionSpec{Static: 3},
+		)
+		if err != nil {
+			t.Fatalf("DynamicIota failed: %v", err)
+		}
+
+		err = mainFn.Return([]compute.Value{iotaVal}, nil)
+		if err != nil {
+			t.Fatalf("Return failed: %v", err)
+		}
+
+		exec, err := builder.Compile()
+		if err != nil {
+			t.Fatalf("Compile failed: %v", err)
+		}
+		defer exec.Finalize()
+
+		inBuf, err := backend.BufferFromFlatData(0, []int32{2}, shapes.Make(dtypes.Int32))
+		if err != nil {
+			t.Fatalf("BufferFromFlatData failed: %v", err)
+		}
+		defer inBuf.Finalize()
+
+		outBufs, err := exec.Execute([]compute.Buffer{inBuf}, []bool{false}, 0)
+		if err != nil {
+			t.Fatalf("Execute failed: %v", err)
+		}
+		defer outBufs[0].Finalize()
+
+		res := make([]int32, 6)
+		if err := outBufs[0].ToFlatData(res); err != nil {
+			t.Fatalf("ToFlatData failed: %v", err)
+		}
+		if !slices.Equal(res, []int32{0, 1, 2, 0, 1, 2}) {
+			t.Fatalf("expected [0 1 2 0 1 2], got %v", res)
+		}
+	})
+
+	t.Run("DynamicPad", func(t *testing.T) {
+		builder := backend.Builder("test_dynamic_pad")
+		mainFn := builder.Main()
+
+		xParam, err := mainFn.Parameter("x", shapes.Make(dtypes.Float32, 2, 2), nil)
+		if err != nil {
+			t.Fatalf("Parameter x failed: %v", err)
+		}
+		padStartParam, err := mainFn.Parameter("pad_start", shapes.Make(dtypes.Int32), nil)
+		if err != nil {
+			t.Fatalf("Parameter pad_start failed: %v", err)
+		}
+		fillVal, err := mainFn.Constant([]float32{0})
+		if err != nil {
+			t.Fatalf("Constant failed: %v", err)
+		}
+
+		padded, err := mainFn.DynamicPad(xParam, fillVal,
+			compute.DynamicPadAxis{StartValue: padStartParam, End: 1},
+			compute.DynamicPadAxis{Start: 1, End: 0},
+		)
+		if err != nil {
+			t.Fatalf("DynamicPad failed: %v", err)
+		}
+
+		err = mainFn.Return([]compute.Value{padded}, nil)
+		if err != nil {
+			t.Fatalf("Return failed: %v", err)
+		}
+
+		exec, err := builder.Compile()
+		if err != nil {
+			t.Fatalf("Compile failed: %v", err)
+		}
+		defer exec.Finalize()
+
+		inX, err := backend.BufferFromFlatData(0, []float32{1, 2, 3, 4}, shapes.Make(dtypes.Float32, 2, 2))
+		if err != nil {
+			t.Fatalf("BufferFromFlatData x failed: %v", err)
+		}
+		defer inX.Finalize()
+
+		inPad, err := backend.BufferFromFlatData(0, []int32{1}, shapes.Make(dtypes.Int32))
+		if err != nil {
+			t.Fatalf("BufferFromFlatData pad failed: %v", err)
+		}
+		defer inPad.Finalize()
+
+		outBufs, err := exec.Execute([]compute.Buffer{inX, inPad}, []bool{false, false}, 0)
+		if err != nil {
+			t.Fatalf("Execute failed: %v", err)
+		}
+		defer outBufs[0].Finalize()
+
+		// output shape is (1+2+1, 1+2+0) = (4, 3), total 12 elements
+		res := make([]float32, 12)
+		if err := outBufs[0].ToFlatData(res); err != nil {
+			t.Fatalf("ToFlatData failed: %v", err)
+		}
+		expected := []float32{
+			0, 0, 0,
+			0, 1, 2,
+			0, 3, 4,
+			0, 0, 0,
+		}
+		if !slices.Equal(res, expected) {
+			t.Fatalf("expected %v, got %v", expected, res)
+		}
+	})
 }
+
