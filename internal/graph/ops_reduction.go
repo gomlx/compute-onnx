@@ -22,10 +22,17 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 
 	originalDType := xNode.shape.DType
 	isUnsigned := originalDType == dtypes.Uint8 || originalDType == dtypes.Uint16 || originalDType == dtypes.Uint32 || originalDType == dtypes.Uint64
+	isBFloat16MinMax := (opType == compute.OpTypeReduceMin || opType == compute.OpTypeReduceMax) && originalDType == dtypes.BFloat16
 
 	var reduceInput *Node
 	if isUnsigned {
 		castInput, err := f.ConvertDType(xNode, dtypes.Int64)
+		if err != nil {
+			return nil, err
+		}
+		reduceInput = castInput.(*Node)
+	} else if isBFloat16MinMax {
+		castInput, err := f.ConvertDType(xNode, dtypes.Float32)
 		if err != nil {
 			return nil, err
 		}
@@ -66,14 +73,8 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 	var ortOpType string
 	switch opType {
 	case compute.OpTypeReduceMin:
-		if reduceInput.shape.DType == dtypes.BFloat16 {
-			return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support BFloat16 for ReduceMin: ONNX Runtime CPU/CUDA kernels do not support tensor(bfloat16) for ReduceMin")
-		}
 		ortOpType = "ReduceMin"
 	case compute.OpTypeReduceMax:
-		if reduceInput.shape.DType == dtypes.BFloat16 {
-			return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support BFloat16 for ReduceMax: ONNX Runtime CPU/CUDA kernels do not support tensor(bfloat16) for ReduceMax")
-		}
 		ortOpType = "ReduceMax"
 	case compute.OpTypeReduceSum:
 		ortOpType = "ReduceSum"
@@ -131,7 +132,7 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 		finalNode = reshapeNode
 	}
 
-	if isUnsigned {
+	if isUnsigned || isBFloat16MinMax {
 		castBack, err := f.ConvertDType(finalNode, originalDType)
 		if err != nil {
 			return nil, err
