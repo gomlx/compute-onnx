@@ -24,11 +24,12 @@ func init() {
 	registerOp(compute.OpTypeFusedQuantizedDense)
 }
 
-func broadcastToShape(f *Function, val compute.Value, targetShape shapes.Shape) (compute.Value, error) {
+func broadcastToShape(f *Function, val compute.Value, targetRef *Node) (compute.Value, error) {
 	valNode, ok := val.(*Node)
 	if !ok {
 		return nil, errors.New("broadcastToShape: val must be a valid onnxruntime node")
 	}
+	targetShape := targetRef.shape
 	if valNode.shape.Equal(targetShape) {
 		return valNode, nil
 	}
@@ -39,18 +40,42 @@ func broadcastToShape(f *Function, val compute.Value, targetShape shapes.Shape) 
 	currVal := valNode
 	if currentRank < targetRank {
 		diff := targetRank - currentRank
-		newDims := make([]int, targetRank)
-		for i := range diff {
-			newDims[i] = 1
+		if valNode.shape.IsDynamic() {
+			specs := make([]compute.DynamicDimensionSpec, targetRank)
+			for i := range diff {
+				specs[i] = compute.DynamicDimensionSpec{Static: 1}
+			}
+			for i := range currentRank {
+				d := valNode.shape.Dimensions[i]
+				if d == shapes.DynamicDim {
+					dimVal, err := f.DynamicDimensionSize(valNode, i)
+					if err != nil {
+						return nil, err
+					}
+					specs[diff+i] = compute.DynamicDimensionSpec{Name: valNode.shape.AxisName(i), Value: dimVal}
+				} else {
+					specs[diff+i] = compute.DynamicDimensionSpec{Static: d}
+				}
+			}
+			reshaped, err := f.DynamicReshape(valNode, specs...)
+			if err != nil {
+				return nil, err
+			}
+			currVal = reshaped.(*Node)
+		} else {
+			newDims := make([]int, targetRank)
+			for i := range diff {
+				newDims[i] = 1
+			}
+			for i := range currentRank {
+				newDims[diff+i] = valNode.shape.Dimensions[i]
+			}
+			reshaped, err := f.Reshape(valNode, newDims...)
+			if err != nil {
+				return nil, err
+			}
+			currVal = reshaped.(*Node)
 		}
-		for i := range currentRank {
-			newDims[diff+i] = valNode.shape.Dimensions[i]
-		}
-		reshaped, err := f.Reshape(valNode, newDims...)
-		if err != nil {
-			return nil, err
-		}
-		currVal = reshaped.(*Node)
 	}
 
 	if currVal.shape.Equal(targetShape) {
@@ -61,19 +86,35 @@ func broadcastToShape(f *Function, val compute.Value, targetShape shapes.Shape) 
 	for i := range targetRank {
 		axes[i] = i
 	}
+	if targetShape.IsDynamic() {
+		specs := make([]compute.DynamicDimensionSpec, targetRank)
+		for i := range targetRank {
+			d := targetShape.Dimensions[i]
+			if d == shapes.DynamicDim {
+				dimVal, err := f.DynamicDimensionSize(targetRef, i)
+				if err != nil {
+					return nil, err
+				}
+				specs[i] = compute.DynamicDimensionSpec{Name: targetShape.AxisName(i), Value: dimVal}
+			} else {
+				specs[i] = compute.DynamicDimensionSpec{Static: d}
+			}
+		}
+		return f.DynamicBroadcastInDim(currVal, axes, specs...)
+	}
 	return f.BroadcastInDim(currVal, targetShape, axes)
 }
 
-func alignAttentionScoreTensor(f *Function, val compute.Value, axesLayout compute.AttentionAxesLayout, qBHSD *Node, targetShape shapes.Shape) (compute.Value, error) {
+func alignAttentionScoreTensor(f *Function, val compute.Value, axesLayout compute.AttentionAxesLayout, qBHSD *Node, targetRef *Node) (compute.Value, error) {
 	node, ok := val.(*Node)
 	if !ok {
 		return nil, errors.New("alignAttentionScoreTensor: val must be a valid onnxruntime node")
 	}
 
 	rank := node.shape.Rank()
-	targetRank := targetShape.Rank()
+	targetRank := targetRef.shape.Rank()
 	if targetRank != 4 {
-		return nil, errors.Errorf("alignAttentionScoreTensor: targetShape must be rank 4, got %d", targetRank)
+		return nil, errors.Errorf("alignAttentionScoreTensor: expected 4D target score shape, got rank %d (%s)", targetRank, targetRef.shape)
 	}
 
 	var currNode *Node = node
@@ -108,7 +149,7 @@ func alignAttentionScoreTensor(f *Function, val compute.Value, axesLayout comput
 		}
 	}
 
-	return broadcastToShape(f, currNode, targetShape)
+	return broadcastToShape(f, currNode, targetRef)
 }
 
 // FusedSoftmax computes softmax along the specified axis using ONNX Softmax.
@@ -314,7 +355,7 @@ func (f *Function) FusedDense(x, weight, bias compute.Value, options compute.Den
 			return nil, errors.New("FusedDense: bias must be a valid onnxruntime node")
 		}
 		dotNode := dotRes.(*Node)
-		biasReshaped, err := broadcastToShape(f, biasNode, dotNode.shape)
+		biasReshaped, err := broadcastToShape(f, biasNode, dotNode)
 		if err != nil {
 			return nil, errors.Wrap(err, "FusedDense: bias reshape failed")
 		}
@@ -478,15 +519,46 @@ func (f *Function) FusedScaledDotProductAttention(
 			if !ok {
 				return nil, nil, errors.New("FusedScaledDotProductAttention: KeyValueSeqLen must be a valid onnxruntime node")
 			}
-			kvSeqIdx, err := f.Iota(shapes.Make(dtypes.Int32, 1, 1, 1, kvLen), 3)
-			if err != nil {
-				return nil, nil, err
+			var kvSeqIdx compute.Value
+			if kBHSD.shape.IsDynamic() && kvLen == shapes.DynamicDim {
+				kvLenDyn, errDyn := f.DynamicDimensionSize(kBHSD, 2)
+				if errDyn != nil {
+					return nil, nil, errDyn
+				}
+				kvSeqIdx, err = f.DynamicIota(dtypes.Int32, 3,
+					compute.DynamicDimensionSpec{Static: 1},
+					compute.DynamicDimensionSpec{Static: 1},
+					compute.DynamicDimensionSpec{Static: 1},
+					compute.DynamicDimensionSpec{Name: kBHSD.shape.AxisName(2), Value: kvLenDyn},
+				)
+				if err != nil {
+					return nil, nil, err
+				}
+			} else {
+				kvSeqIdx, err = f.Iota(shapes.Make(dtypes.Int32, 1, 1, 1, kvLen), 3)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 			kvLen32, err := f.ConvertDType(kvLenNode, dtypes.Int32)
 			if err != nil {
 				return nil, nil, err
 			}
-			kvLenReshaped, err := f.Reshape(kvLen32, batchSize, 1, 1, 1)
+			var kvLenReshaped compute.Value
+			if kvLenNode.shape.IsDynamic() && batchSize == shapes.DynamicDim {
+				batchDyn, errDyn := f.DynamicDimensionSize(kvLenNode, 0)
+				if errDyn != nil {
+					return nil, nil, errDyn
+				}
+				kvLenReshaped, err = f.DynamicReshape(kvLen32,
+					compute.DynamicDimensionSpec{Name: kvLenNode.shape.AxisName(0), Value: batchDyn},
+					compute.DynamicDimensionSpec{Static: 1},
+					compute.DynamicDimensionSpec{Static: 1},
+					compute.DynamicDimensionSpec{Static: 1},
+				)
+			} else {
+				kvLenReshaped, err = f.Reshape(kvLen32, batchSize, 1, 1, 1)
+			}
 			if err != nil {
 				return nil, nil, err
 			}
@@ -502,15 +574,46 @@ func (f *Function) FusedScaledDotProductAttention(
 			if !ok {
 				return nil, nil, errors.New("FusedScaledDotProductAttention: QuerySeqLen must be a valid onnxruntime node")
 			}
-			qSeqIdx, err := f.Iota(shapes.Make(dtypes.Int32, 1, 1, seqLen, 1), 2)
-			if err != nil {
-				return nil, nil, err
+			var qSeqIdx compute.Value
+			if qBHSD.shape.IsDynamic() && seqLen == shapes.DynamicDim {
+				seqLenDyn, errDyn := f.DynamicDimensionSize(qBHSD, 2)
+				if errDyn != nil {
+					return nil, nil, errDyn
+				}
+				qSeqIdx, err = f.DynamicIota(dtypes.Int32, 2,
+					compute.DynamicDimensionSpec{Static: 1},
+					compute.DynamicDimensionSpec{Static: 1},
+					compute.DynamicDimensionSpec{Name: qBHSD.shape.AxisName(2), Value: seqLenDyn},
+					compute.DynamicDimensionSpec{Static: 1},
+				)
+				if err != nil {
+					return nil, nil, err
+				}
+			} else {
+				qSeqIdx, err = f.Iota(shapes.Make(dtypes.Int32, 1, 1, seqLen, 1), 2)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 			qLen32, err := f.ConvertDType(qLenNode, dtypes.Int32)
 			if err != nil {
 				return nil, nil, err
 			}
-			qLenReshaped, err := f.Reshape(qLen32, batchSize, 1, 1, 1)
+			var qLenReshaped compute.Value
+			if qLenNode.shape.IsDynamic() && batchSize == shapes.DynamicDim {
+				batchDyn, errDyn := f.DynamicDimensionSize(qLenNode, 0)
+				if errDyn != nil {
+					return nil, nil, errDyn
+				}
+				qLenReshaped, err = f.DynamicReshape(qLen32,
+					compute.DynamicDimensionSpec{Name: qLenNode.shape.AxisName(0), Value: batchDyn},
+					compute.DynamicDimensionSpec{Static: 1},
+					compute.DynamicDimensionSpec{Static: 1},
+					compute.DynamicDimensionSpec{Static: 1},
+				)
+			} else {
+				qLenReshaped, err = f.Reshape(qLen32, batchSize, 1, 1, 1)
+			}
 			if err != nil {
 				return nil, nil, err
 			}
@@ -530,7 +633,7 @@ func (f *Function) FusedScaledDotProductAttention(
 
 		if seqLenMask != nil {
 			scoresNode := scoresVal.(*Node)
-			maskReshaped, err := broadcastToShape(f, seqLenMask, scoresNode.shape)
+			maskReshaped, err := broadcastToShape(f, seqLenMask, scoresNode)
 			if err != nil {
 				return nil, nil, errors.Wrap(err, "FusedScaledDotProductAttention: seqLenMask reshape failed")
 			}
@@ -619,7 +722,7 @@ func (f *Function) FusedScaledDotProductAttention(
 	// Apply explicit mask if provided
 	if options != nil && options.Mask != nil {
 		scoresNode := scoresVal.(*Node)
-		maskAligned, err := alignAttentionScoreTensor(f, options.Mask, axesLayout, qBHSD, scoresNode.shape)
+		maskAligned, err := alignAttentionScoreTensor(f, options.Mask, axesLayout, qBHSD, scoresNode)
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "FusedScaledDotProductAttention: mask alignment failed")
 		}
@@ -655,7 +758,7 @@ func (f *Function) FusedScaledDotProductAttention(
 	// Apply additive bias if provided
 	if options != nil && options.Bias != nil {
 		scoresNode := scoresVal.(*Node)
-		biasAligned, err := alignAttentionScoreTensor(f, options.Bias, axesLayout, qBHSD, scoresNode.shape)
+		biasAligned, err := alignAttentionScoreTensor(f, options.Bias, axesLayout, qBHSD, scoresNode)
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "FusedScaledDotProductAttention: bias alignment failed")
 		}
@@ -730,7 +833,7 @@ func (f *Function) FusedQuantizedDense(x, weights, bias compute.Value, weightsQu
 			return nil, errors.Wrap(err, "FusedQuantizedDense: converting zeroPoint to float32 failed")
 		}
 		wNode := wFloat.(*Node)
-		zpReshaped, err := broadcastToShape(f, zpFloat, wNode.shape)
+		zpReshaped, err := broadcastToShape(f, zpFloat, wNode)
 		if err != nil {
 			return nil, errors.Wrap(err, "FusedQuantizedDense: zeroPoint reshape failed")
 		}
@@ -747,7 +850,7 @@ func (f *Function) FusedQuantizedDense(x, weights, bias compute.Value, weightsQu
 			return nil, errors.Wrap(err, "FusedQuantizedDense: converting scale to float32 failed")
 		}
 		wNode := wFloat.(*Node)
-		scaleReshaped, err := broadcastToShape(f, scaleFloat, wNode.shape)
+		scaleReshaped, err := broadcastToShape(f, scaleFloat, wNode)
 		if err != nil {
 			return nil, errors.Wrap(err, "FusedQuantizedDense: scale reshape failed")
 		}
@@ -828,7 +931,7 @@ func (f *Function) FusedAttentionQKVProjection(
 			return nil, nil, nil, errors.New("FusedAttentionQKVProjection: biasQ must be a valid onnxruntime node")
 		}
 		qNode := qSlice.(*Node)
-		bqReshaped, err := broadcastToShape(f, bqNode, qNode.shape)
+		bqReshaped, err := broadcastToShape(f, bqNode, qNode)
 		if err != nil {
 			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: biasQ reshape failed")
 		}
@@ -844,7 +947,7 @@ func (f *Function) FusedAttentionQKVProjection(
 			return nil, nil, nil, errors.New("FusedAttentionQKVProjection: biasK must be a valid onnxruntime node")
 		}
 		kNode := kSlice.(*Node)
-		bkReshaped, err := broadcastToShape(f, bkNode, kNode.shape)
+		bkReshaped, err := broadcastToShape(f, bkNode, kNode)
 		if err != nil {
 			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: biasK reshape failed")
 		}
@@ -860,7 +963,7 @@ func (f *Function) FusedAttentionQKVProjection(
 			return nil, nil, nil, errors.New("FusedAttentionQKVProjection: biasV must be a valid onnxruntime node")
 		}
 		vNode := vSlice.(*Node)
-		bvReshaped, err := broadcastToShape(f, bvNode, vNode.shape)
+		bvReshaped, err := broadcastToShape(f, bvNode, vNode)
 		if err != nil {
 			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: biasV reshape failed")
 		}

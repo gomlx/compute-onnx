@@ -117,8 +117,7 @@ func (f *Function) Gather(
 			return nil, errM
 		}
 		if indicesNode.shape.Rank() > 1 {
-			bAxes := []int{indicesNode.shape.Rank() - 1}
-			bCastVal, errB := f.BroadcastInDim(maxConst, indicesNode.shape, bAxes)
+			bCastVal, errB := broadcastToShape(f, maxConst, indicesNode)
 			if errB != nil {
 				return nil, errB
 			}

@@ -133,6 +133,11 @@ func (f *Function) BroadcastInDim(x compute.Value, outputShape shapes.Shape, bro
 		return nil, errors.New("input must be a valid onnxruntime node")
 	}
 
+	err := shapeinference.BroadcastInDim(xNode.shape, outputShape, broadcastAxes, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	reshapeDims := make([]int, outputShape.Rank())
 	for i := range reshapeDims {
 		reshapeDims[i] = 1
@@ -142,87 +147,13 @@ func (f *Function) BroadcastInDim(x compute.Value, outputShape shapes.Shape, bro
 	}
 
 	reshaped, err := f.Reshape(xNode, reshapeDims...)
+	targetDims64 := make([]int64, outputShape.Rank())
+	for i, d := range outputShape.Dimensions {
+		targetDims64[i] = int64(d)
+	}
+	targetDimsNode, err := f.Constant(targetDims64, outputShape.Rank())
 	if err != nil {
 		return nil, err
-	}
-
-	var targetDimsNode compute.Value
-	if outputShape.IsDynamic() {
-		parts := make([]compute.Value, outputShape.Rank())
-		for i, d := range outputShape.Dimensions {
-			if d == shapes.DynamicDim {
-				axisName := outputShape.AxisName(i)
-				// Check if input node has the same named axis
-				matched := false
-				for j := range broadcastAxes {
-					if xNode.shape.Dimensions[j] == shapes.DynamicDim && xNode.shape.AxisName(j) == axisName && axisName != "" {
-						dynDim, err := f.DynamicDimensionSize(xNode, j)
-						if err != nil {
-							return nil, err
-						}
-						dynDim64, err := f.ConvertDType(dynDim, dtypes.Int64)
-						if err != nil {
-							return nil, err
-						}
-						parts[i], err = f.Reshape(dynDim64, 1)
-						if err != nil {
-							return nil, err
-						}
-						matched = true
-						break
-					}
-				}
-				if !matched {
-					// Fallback: If input has dynamic dim at matching rank position
-					if i < xNode.shape.Rank() && xNode.shape.Dimensions[i] == shapes.DynamicDim {
-						dynDim, err := f.DynamicDimensionSize(xNode, i)
-						if err != nil {
-							return nil, err
-						}
-						dynDim64, err := f.ConvertDType(dynDim, dtypes.Int64)
-						if err != nil {
-							return nil, err
-						}
-						parts[i], err = f.Reshape(dynDim64, 1)
-						if err != nil {
-							return nil, err
-						}
-					} else {
-						// Shape/Reshape with 1 for unspecified dynamic dim
-						constNode, err := f.Constant([]int64{1}, 1)
-						if err != nil {
-							return nil, err
-						}
-						parts[i] = constNode
-					}
-				}
-			} else {
-				constNode, err := f.Constant([]int64{int64(d)}, 1)
-				if err != nil {
-					return nil, err
-				}
-				parts[i] = constNode
-			}
-		}
-		if len(parts) == 1 {
-			targetDimsNode = parts[0]
-		} else {
-			var err error
-			targetDimsNode, err = f.Concatenate(0, parts...)
-			if err != nil {
-				return nil, err
-			}
-		}
-	} else {
-		targetDims64 := make([]int64, outputShape.Rank())
-		for i, d := range outputShape.Dimensions {
-			targetDims64[i] = int64(d)
-		}
-		var err error
-		targetDimsNode, err = f.Constant(targetDims64, outputShape.Rank())
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	outShape := outputShape
@@ -513,13 +444,7 @@ func (f *Function) DynamicReshape(operand compute.Value, dimensions ...compute.D
 
 	parts := make([]compute.Value, len(dimensions))
 	for i, spec := range dimensions {
-		if spec.Name != "" && spec.Value == nil {
-			constNode, err := f.Constant([]int64{-1}, 1)
-			if err != nil {
-				return nil, err
-			}
-			parts[i] = constNode
-		} else if spec.Value != nil {
+		if spec.Value != nil {
 			valNode, ok := spec.Value.(*Node)
 			if !ok {
 				return nil, errors.New("dimension spec Value is not a valid onnxruntime node")
@@ -541,8 +466,15 @@ func (f *Function) DynamicReshape(operand compute.Value, dimensions ...compute.D
 				}
 			}
 			parts[i] = v
-		} else {
+		} else if spec.Static > 0 {
 			constNode, err := f.Constant([]int64{int64(spec.Static)}, 1)
+			if err != nil {
+				return nil, err
+			}
+			parts[i] = constNode
+		} else {
+			// Inferred dimension: -1 in ONNX Reshape
+			constNode, err := f.Constant([]int64{-1}, 1)
 			if err != nil {
 				return nil, err
 			}
@@ -657,10 +589,16 @@ func (f *Function) DynamicBroadcastInDim(operand compute.Value, broadcastAxes []
 				}
 			}
 			parts[i] = v
-		} else if spec.Name != "" {
-			matched := false
+		} else if spec.Static > 0 {
+			constNode, err := f.Constant([]int64{int64(spec.Static)}, 1)
+			if err != nil {
+				return nil, err
+			}
+			parts[i] = constNode
+		} else {
+			resolved := false
 			for operandAxis, outputAxis := range broadcastAxes {
-				if outputAxis == i {
+				if outputAxis == i && xNode.shape.Dimensions[operandAxis] == shapes.DynamicDim {
 					dimVal, err := f.DynamicDimensionSize(xNode, operandAxis)
 					if err != nil {
 						return nil, err
@@ -669,27 +607,18 @@ func (f *Function) DynamicBroadcastInDim(operand compute.Value, broadcastAxes []
 					if err != nil {
 						return nil, err
 					}
-					parts[i], err = f.Reshape(dimVal64, 1)
+					reshapedDim, err := f.Reshape(dimVal64, 1)
 					if err != nil {
 						return nil, err
 					}
-					matched = true
+					parts[i] = reshapedDim
+					resolved = true
 					break
 				}
 			}
-			if !matched {
-				constNode, err := f.Constant([]int64{1}, 1)
-				if err != nil {
-					return nil, err
-				}
-				parts[i] = constNode
+			if !resolved {
+				return nil, errors.Errorf("DynamicBroadcastInDim: axis %d requires a non-nil Value node or positive Static dimension", i)
 			}
-		} else {
-			constNode, err := f.Constant([]int64{int64(spec.Static)}, 1)
-			if err != nil {
-				return nil, err
-			}
-			parts[i] = constNode
 		}
 	}
 
@@ -1063,7 +992,7 @@ func (f *Function) DynamicUpdateSlice(operand, update compute.Value, startIndice
 		}
 	}
 
-	fullMaskReshaped, err := broadcastToShape(f, fullMask, opNode.shape)
+	fullMaskReshaped, err := broadcastToShape(f, fullMask, opNode)
 	if err != nil {
 		return nil, errors.Wrap(err, "DynamicUpdateSlice: mask broadcast failed")
 	}
@@ -1226,13 +1155,13 @@ func (f *Function) DynamicIota(dtype dtypes.DType, iotaAxis int, dimensions ...c
 				return nil, err
 			}
 		}
-	} else if axisSpec.Name == "" {
+	} else if axisSpec.Static > 0 {
 		limitNode, err = MakeScalar(f, axisSpec.Static, rangeDType)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		return nil, errors.Errorf("DynamicIota: dynamic axis %d (%q) requires a dynamic Value", iotaAxis, axisSpec.Name)
+		return nil, errors.Errorf("DynamicIota: axis %d requires a non-nil Value node or positive Static dimension", iotaAxis)
 	}
 
 	deltaNode, err := MakeScalar(f, 1, rangeDType)
