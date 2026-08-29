@@ -88,6 +88,18 @@ func (f *Function) Cos(x compute.Value) (compute.Value, error) {
 		return nil, errors.New("input must be a valid onnxruntime node")
 	}
 
+	if xNode.shape.DType == dtypes.BFloat16 {
+		x32, err := f.ConvertDType(xNode, dtypes.Float32)
+		if err != nil {
+			return nil, err
+		}
+		cos32, err := f.Cos(x32)
+		if err != nil {
+			return nil, err
+		}
+		return f.ConvertDType(cos32, dtypes.BFloat16)
+	}
+
 	// ONNX Runtime CPU provider lacks Cos for Float64 (double).
 	// We compute cos(x) = sin(x + pi/2) when DType is Float64.
 	if xNode.shape.DType == dtypes.Float64 {
@@ -106,6 +118,23 @@ func (f *Function) Cos(x compute.Value) (compute.Value, error) {
 }
 
 func (f *Function) Sin(x compute.Value) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("input must be a valid onnxruntime node")
+	}
+
+	if xNode.shape.DType == dtypes.BFloat16 {
+		x32, err := f.ConvertDType(xNode, dtypes.Float32)
+		if err != nil {
+			return nil, err
+		}
+		sin32, err := f.Sin(x32)
+		if err != nil {
+			return nil, err
+		}
+		return f.ConvertDType(sin32, dtypes.BFloat16)
+	}
+
 	return f.addUnaryOp(compute.OpTypeSin, "Sin", x)
 }
 

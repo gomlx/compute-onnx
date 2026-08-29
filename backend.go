@@ -150,6 +150,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		DTypes:                      make(map[dtypes.DType]bool),
 		PreferConstantsForVariables: true,
 		DynamicAxes:                 true,
+		DynamicShapes:               compute.DynamicShapesNative,
 	}
 	caps.DTypes[dtypes.Float32] = true
 	caps.DTypes[dtypes.Float64] = b.hasFloat64

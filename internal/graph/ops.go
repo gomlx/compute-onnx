@@ -93,12 +93,16 @@ func init() {
 	registerOp(compute.OpTypeReverse)
 	registerOp(compute.OpTypeTranspose)
 	registerOp(compute.OpTypeBroadcastInDim)
+	registerOp(compute.OpTypeDynamicBroadcastInDim)
 	registerOp(compute.OpTypeConcatenate)
 	registerOp(compute.OpTypeSlice)
 	registerOp(compute.OpTypeDynamicSlice)
 	registerOp(compute.OpTypeDynamicUpdateSlice)
 	registerOp(compute.OpTypePad)
+	registerOp(compute.OpTypeDynamicPad)
 	registerOp(compute.OpTypeIota)
+	registerOp(compute.OpTypeDynamicIota)
+	registerOp(compute.OpTypeCumSum)
 
 	// Reductions
 	registerOp(compute.OpTypeReduceMin)
