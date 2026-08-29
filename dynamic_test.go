@@ -19,8 +19,8 @@ func TestDynamicOps(t *testing.T) {
 	}
 	defer backend.Finalize()
 
-	if !backend.Capabilities().DynamicAxes {
-		t.Fatalf("expected DynamicAxes capability to be true")
+	if backend.Capabilities().DynamicShapes != compute.DynamicShapesNative {
+		t.Fatalf("expected DynamicSupportNative capability, got %s", backend.Capabilities().DynamicShapes)
 	}
 
 	t.Run("DynamicShapeAndSize", func(t *testing.T) {
@@ -455,4 +455,3 @@ func TestDynamicOps(t *testing.T) {
 		}
 	})
 }
-
