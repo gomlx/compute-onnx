@@ -7,6 +7,7 @@ package onnxruntime
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -132,5 +133,40 @@ func TestNormalizeVersion(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("NormalizeVersion(%q) = %q; want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestFindMigraphxWheelURL(t *testing.T) {
+	url, err := FindMigraphxWheelURL("7.2.4")
+	if err != nil {
+		t.Skipf("network unavailable or listing changed: %+v", err)
+	}
+	if !strings.Contains(url, "rocm-rel-7.2.4/") ||
+		!strings.Contains(url, "onnxruntime_migraphx-") ||
+		!strings.HasSuffix(url, ".whl") {
+		t.Errorf("unexpected wheel URL: %q", url)
+	}
+}
+
+func TestInstallMigraphxWithCustomTarget(t *testing.T) {
+	targetDir := t.TempDir()
+	libPath, err := InstallMigraphx("7.2.4", targetDir, true)
+	if err != nil {
+		t.Skipf("network unavailable or install failed: %+v", err)
+	}
+	if libPath != filepath.Join(targetDir, "libonnxruntime.so") {
+		t.Errorf("unexpected library path returned: %q", libPath)
+	}
+	for _, name := range []string{
+		"libonnxruntime_providers_migraphx.so",
+		"libonnxruntime_providers_shared.so",
+	} {
+		if _, err := os.Stat(filepath.Join(targetDir, name)); err != nil {
+			t.Errorf("expected %s to be installed: %+v", name, err)
+		}
+	}
+	// Idempotent install (no force).
+	if _, err := InstallMigraphx("7.2.4", targetDir, false); err != nil {
+		t.Errorf("second non-forced install should be a no-op success, got: %+v", err)
 	}
 }

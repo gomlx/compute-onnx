@@ -3,7 +3,8 @@
 /*
 Package onnxbackend implements an ONNX Runtime (ORT) compute backend for GoMLX (github.com/gomlx/compute).
 
-It allows GoMLX models to be executed via ONNX Runtime using either CPU or CUDA (NVIDIA GPU).
+It allows GoMLX models to be executed via ONNX Runtime using CPU, CUDA (NVIDIA GPU) or
+MIGraphX (AMD ROCm GPU).
 It supports dynamic shapes and exporting trained models to standard .onnx model files.
 
 # Registration & Initialization
@@ -29,9 +30,17 @@ Accelerator Selection:
     GOMLX_BACKEND=onnx:cpu
   - cuda / gpu: Force CUDA GPU execution using ONNX Runtime CUDA Execution Provider via IoBinding.
     GOMLX_BACKEND=onnx:cuda
+  - migraphx / rocm / amd: Force AMD GPU execution using ONNX Runtime MIGraphX Execution Provider.
+    Requires ROCm and MIGraphX installed (e.g. "sudo apt install migraphx migraphx-dev half").
+    If no ORT library with the MIGraphX provider is found, one is automatically extracted from AMD's
+    manylinux wheels (https://repo.radeon.com/rocm/manylinux/) matching the local ROCm version.
+    Only float32/int32/int64 graphs are advertised as supported, and models with scalar
+    (0-dimensional) inputs fall back to CPU execution.
+    GOMLX_BACKEND=onnx:migraphx
   - <path/to/libonnxruntime.so>: Explicit path to the ONNX Runtime shared library file (bypasses ONNXRUNTIME_SHARED_LIBRARY_PATH).
     GOMLX_BACKEND=onnx:/path/to/libonnxruntime.so
-  - (empty / default): Automatically detects if an NVIDIA GPU is available and defaults to CUDA, falling back to CPU otherwise.
+  - (empty / default): Automatically detects if an NVIDIA GPU is available and defaults to CUDA,
+    then checks for a discrete AMD GPU (ROCm/MIGraphX), falling back to CPU otherwise.
     GOMLX_BACKEND=onnx
 
 ONNX Runtime Internal Logging:
@@ -52,6 +61,13 @@ The backend automatically locates or manages the required ONNX Runtime shared li
   - Custom Library Path: Set the ONNXRUNTIME_SHARED_LIBRARY_PATH environment variable or pass an explicit library path in the configuration string (e.g. "onnx:/path/to/libonnxruntime.so") to point directly to the shared library binary. Specifying an explicit path in the configuration string bypasses ONNXRUNTIME_SHARED_LIBRARY_PATH.
   - Auto-Installation: If no library path is provided, the backend automatically downloads and extracts prebuilt official ONNX Runtime binaries locally (e.g. ~/.local/lib/onnxruntime/ on Linux).
   - Disabling Auto-Installation: Set the environment variable GOMLX_NO_AUTO_INSTALL=1 (or [NoAutoInstallEnv]), or call [EnableAutoInstall](false) programmatically before initializing the backend to disable automatic downloads (useful for offline environments or container deployments).
+
+# AMD ROCm / MIGraphX Environment Variables
+
+The MIGraphX execution provider relies on a local ROCm installation:
+
+  - ROCM_PATH: Directory where ROCm is installed (defaults to /opt/rocm). It is used to locate rocminfo and the HIP/MIGraphX libraries when auto-detecting an AMD GPU and its ROCm version.
+  - GOMLX_MIGRAPHX_CACHE_DIR: Directory where the MIGraphX compiled-program (.mxr) for each model is cached, skipping the expensive graph compilation on subsequent runs. Equivalent to the migraphx_cache_dir config key (e.g. "onnx:migraphx,migraphx_cache_dir=/tmp/mxr"); an empty value disables caching.
 
 # Debugging & Saving Models on Failure
 

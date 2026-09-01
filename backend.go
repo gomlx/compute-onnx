@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	"github.com/gomlx/compute-onnx/internal/graph"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
@@ -32,8 +33,9 @@ func MakeScalar(f *graph.Function, value any, dtype dtypes.DType) (compute.Value
 type Backend struct {
 	config             string
 	version            string
-	cuda               bool
-	executionProvider  string
+	gpuEP              executionprovider.ExecutionProviderType // Native GPU execution provider: "cuda", "migraphx", or CPU only.
+	migraphxCacheDir   string                                  // Native MIGraphX compiled-program cache directory ("migraphx_cache_dir" config key); empty disables caching.
+	executionProvider  string                                  // Web execution provider (wasm/webgpu/webnn); empty on native builds.
 	webVersion         string
 	logSeverity        int
 	enableGraphCapture bool
@@ -124,8 +126,11 @@ func (b *Backend) Description() string {
 	if b.executionProvider != "" {
 		return fmt.Sprintf("ONNX Runtime Web%s (%s) compute backend for GoMLX", verStr, b.executionProvider)
 	}
-	if b.cuda {
+	switch b.gpuEP {
+	case executionprovider.ExecutionProviderCUDA:
 		return fmt.Sprintf("ONNX Runtime%s (CUDA GPU) compute backend for GoMLX", verStr)
+	case executionprovider.ExecutionProviderMIGraphX:
+		return fmt.Sprintf("ONNX Runtime%s (MIGraphX GPU) compute backend for GoMLX", verStr)
 	}
 	return fmt.Sprintf("ONNX Runtime%s (CPU) compute backend for GoMLX", verStr)
 }
@@ -138,8 +143,11 @@ func (b *Backend) DeviceDescription(deviceNum compute.DeviceNum) string {
 	if b.executionProvider != "" {
 		return fmt.Sprintf("Web (%s) Default Device", b.executionProvider)
 	}
-	if b.cuda {
+	switch b.gpuEP {
+	case executionprovider.ExecutionProviderCUDA:
 		return "CUDA GPU (ONNX Runtime Default Device)"
+	case executionprovider.ExecutionProviderMIGraphX:
+		return "MIGraphX GPU (ONNX Runtime Default Device)"
 	}
 	return "CPU (ONNX Runtime Default Device)"
 }
@@ -151,6 +159,17 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		PreferConstantsForVariables: true,
 		DynamicAxes:                 true,
 		DynamicShapes:               compute.DynamicShapesNative,
+	}
+	if b.gpuEP == executionprovider.ExecutionProviderMIGraphX {
+		// The MIGraphX execution provider reliably supports only a subset of dtypes;
+		// others (e.g. float64, uint8) either fall back producing incorrect results
+		// or crash inside MIGraphX. Restrict the advertised capabilities accordingly,
+		// so graphs using unsupported dtypes fail cleanly at compilation time.
+		caps.DynamicAxes = false
+		caps.DTypes[dtypes.Float32] = true
+		caps.DTypes[dtypes.Int32] = true
+		caps.DTypes[dtypes.Int64] = true
+		return caps
 	}
 	caps.DTypes[dtypes.Float32] = true
 	caps.DTypes[dtypes.Float64] = b.hasFloat64

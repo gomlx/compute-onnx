@@ -44,6 +44,9 @@ OrtStatus* wrapper_UpdateCUDAProviderOptions(const OrtApi* api, OrtCUDAProviderO
 OrtStatus* wrapper_SessionOptionsAppendExecutionProvider_CUDA_V2(const OrtApi* api, OrtSessionOptions* options, const OrtCUDAProviderOptionsV2* cuda_options);
 void wrapper_ReleaseCUDAProviderOptions(const OrtApi* api, OrtCUDAProviderOptionsV2* input);
 
+OrtStatus* wrapper_SessionOptionsAppendExecutionProvider_MIGraphX(const OrtApi* api, OrtSessionOptions* options, const OrtMIGraphXProviderOptions* migraphx_options);
+int wrapper_HasMIGraphXSupport(const OrtApi* api);
+
 OrtStatus* wrapper_GetTensorTypeAndShape(const OrtApi* api, const OrtValue* value, OrtTensorTypeAndShapeInfo** out);
 OrtStatus* wrapper_GetTensorElementType(const OrtApi* api, const OrtTensorTypeAndShapeInfo* info, ONNXTensorElementDataType* out);
 OrtStatus* wrapper_GetDimensionsCount(const OrtApi* api, const OrtTensorTypeAndShapeInfo* info, size_t* out);
@@ -100,6 +103,14 @@ func GetVersion() string {
 	return ortVersion
 }
 
+// ORT API versions: the vendored header supports up to maxAPIVersion, but some ONNX Runtime
+// builds expose a lower maximum — e.g. AMD's ROCm/MIGraphX wheels are based on ORT v1.23 (API version 23).
+// We negotiate the highest mutually supported version.
+const (
+	maxAPIVersion = 26
+	minAPIVersion = 17 // minimum needed for SessionOptionsAppendExecutionProvider_CUDA_V2
+)
+
 func InitializeEnvironment() error {
 	if ortApi != nil {
 		return nil
@@ -125,10 +136,15 @@ func InitializeEnvironment() error {
 		ortVersion = C.GoString(cVersion)
 	}
 
-	ortApi = (*C.OrtApi)(C.GetOrtApi(apiBasePtr, C.uint32_t(26))) // version 26
-	if ortApi == nil {
-		_ = closeLibrary(handle)
-		return fmt.Errorf("failed to get OrtApi version 26")
+	for version := uint32(maxAPIVersion); ; version-- {
+		ortApi = (*C.OrtApi)(C.GetOrtApi(apiBasePtr, C.uint32_t(version)))
+		if ortApi != nil {
+			break
+		}
+		if version <= minAPIVersion {
+			_ = closeLibrary(handle)
+			return fmt.Errorf("failed to get an ONNX Runtime API between versions %d and %d", minAPIVersion, maxAPIVersion)
+		}
 	}
 
 	// Create default global environment
@@ -260,6 +276,42 @@ func (c *CUDAProviderOptions) Destroy() error {
 		c.cudaOpts = nil
 	}
 	return nil
+}
+
+// MIGraphXProviderOptions holds the options for the AMD MIGraphX execution provider.
+// It maps to the (frozen) OrtMIGraphXProviderOptions C struct.
+type MIGraphXProviderOptions struct {
+	DeviceID   int  // HIP device id, defaults to 0.
+	FP16Enable bool // MIGraphX FP16 precision.
+	Int8Enable bool // MIGraphX INT8 precision.
+}
+
+func (so *SessionOptions) AppendExecutionProviderMIGraphX(opts *MIGraphXProviderOptions) error {
+	if !HasMIGraphXSupport() {
+		return fmt.Errorf("the loaded ONNX Runtime library (%s) was not built with MIGraphX execution provider support; "+
+			"install an AMD ROCm build, e.g. with: go run github.com/gomlx/compute-onnx/cmd/onnxruntime_installer -migraphx", ortVersion)
+	}
+	var cOpts C.OrtMIGraphXProviderOptions
+	if opts != nil {
+		cOpts.device_id = C.int(opts.DeviceID)
+		if opts.FP16Enable {
+			cOpts.migraphx_fp16_enable = 1
+		}
+		if opts.Int8Enable {
+			cOpts.migraphx_int8_enable = 1
+		}
+	}
+	status := C.wrapper_SessionOptionsAppendExecutionProvider_MIGraphX(ortApi, so.options, &cOpts)
+	return statusToError(status)
+}
+
+// HasMIGraphXSupport returns whether the loaded ONNX Runtime library exposes the
+// MIGraphX execution provider entry points (CPU-only builds leave them unset).
+func HasMIGraphXSupport() bool {
+	if ortApi == nil {
+		return false
+	}
+	return C.wrapper_HasMIGraphXSupport(ortApi) != 0
 }
 
 type Session struct {
@@ -628,8 +680,6 @@ func NewEmptyTensor[T TensorData](shape Shape) (*Tensor[T], error) {
 		shape: shape,
 	}, nil
 }
-
-
 
 func (s *Session) Run(inputNames []string, inputValues []Value, outputNames []string, outputValues []Value) error {
 	arena := GetArena(8192)

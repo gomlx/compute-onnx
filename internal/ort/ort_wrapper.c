@@ -118,6 +118,14 @@ void wrapper_ReleaseCUDAProviderOptions(const OrtApi* api, OrtCUDAProviderOption
     api->ReleaseCUDAProviderOptions(input);
 }
 
+OrtStatus* wrapper_SessionOptionsAppendExecutionProvider_MIGraphX(const OrtApi* api, OrtSessionOptions* options, const OrtMIGraphXProviderOptions* migraphx_options) {
+    return api->SessionOptionsAppendExecutionProvider_MIGraphX(options, migraphx_options);
+}
+
+int wrapper_HasMIGraphXSupport(const OrtApi* api) {
+    return api->SessionOptionsAppendExecutionProvider_MIGraphX != NULL;
+}
+
 OrtStatus* wrapper_GetTensorTypeAndShape(const OrtApi* api, const OrtValue* value, OrtTensorTypeAndShapeInfo** out) {
     return api->GetTensorTypeAndShape(value, out);
 }
