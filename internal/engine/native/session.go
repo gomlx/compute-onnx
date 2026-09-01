@@ -67,9 +67,8 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 		// (0-dimensional) inputs aborts inside migraphx::program::eval
 		// ("contexts.size() == 1" assertion). Such models fall back to CPU execution.
 		if hasScalarInput(inputShapes) {
-			klog.Warningf("MIGraphX execution provider does not support scalar (0-dimensional) inputs; " +
-				"running this model on CPU instead")
-			break
+			return nil, errors.Errorf("MIGraphX execution provider does not support scalar (0-dimensional) inputs; " +
+				"run this model on CPU instead (maybe by setting GOMLX_BACKEND=\"onnx:cpu\")")
 		}
 		migraphxOpts := &ort.MIGraphXProviderOptions{DeviceID: 0}
 		if migraphx != nil && migraphx.CacheDir != "" {
