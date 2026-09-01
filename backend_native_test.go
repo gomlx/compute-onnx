@@ -84,7 +84,7 @@ func TestParseConfig(t *testing.T) {
 
 	tests := []struct {
 		config            string
-		wantEP            executionprovider.ExecutionProviderType
+		wantEP            executionprovider.Type
 		wantLog           int
 		wantCustomLibPath string
 		wantCacheDir      string
@@ -133,7 +133,7 @@ func TestParseConfig(t *testing.T) {
 
 // autoDetectedEP returns the expected GPU EP when no explicit provider token is given,
 // given a directory that contains a fake CUDA provider library.
-func autoDetectedEP(dir string) executionprovider.ExecutionProviderType {
+func autoDetectedEP(dir string) executionprovider.Type {
 	if cuda.HasNvidiaGPU() && cuda.IsCUDALibraryAvailable(dir) {
 		return executionprovider.CUDA
 	}

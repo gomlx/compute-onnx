@@ -37,7 +37,7 @@ type Executable struct {
 	outputNames      []string
 	outputShapes     []shapes.Shape
 	reusableWrappers []OrtTensorWrapper
-	gpuEP            executionprovider.ExecutionProviderType // GPU execution provider: CUDA, MIGraphX, or CPU only.
+	gpuEP            executionprovider.Type // GPU execution provider: CUDA, MIGraphX, or CPU only.
 
 	// warmedShapes tracks which input-shape signatures have already been through the
 	// MIGraphX first-eval warm-up (see migraphxWorkaround). Only used when gpuEP == MIGraphX.
@@ -61,7 +61,7 @@ var _ compute.Executable = (*Executable)(nil)
 func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 	inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape,
-	modelProto *onnx.ModelProto, gpuEP executionprovider.ExecutionProviderType) *Executable {
+	modelProto *onnx.ModelProto, gpuEP executionprovider.Type) *Executable {
 
 	nInputs := len(inputNames)
 	nOutputs := len(outputShapes)

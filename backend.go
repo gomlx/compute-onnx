@@ -31,19 +31,19 @@ func MakeScalar(f *graph.Function, value any, dtype dtypes.DType) (compute.Value
 
 // Backend represents an ONNX Runtime backed [compute.Backend].
 type Backend struct {
-	config             string
-	version            string
-	gpuEP              executionprovider.ExecutionProviderType // Native GPU execution provider: "cuda", "migraphx", or CPU only.
-	migraphxCacheDir   string                                  // Native MIGraphX compiled-program cache directory ("migraphx_cache_dir" config key); empty disables caching.
-	executionProvider  string                                  // Web execution provider (wasm/webgpu/webnn); empty on native builds.
-	webVersion         string
-	logSeverity        int
-	enableGraphCapture bool
-	hasFloat64         bool
-	hasFloat16         bool
-	hasBFloat16        bool
-	isFinalized        bool
-	keepModelProto     bool
+	config                string
+	version               string
+	executionProvider     executionprovider.Type // Native GPU execution provider: "cuda", "migraphx", or CPU only.
+	migraphxCacheDir      string                 // Native MIGraphX compiled-program cache directory ("migraphx_cache_dir" config key); empty disables caching.
+	executionProviderName string                 // Web execution provider (wasm/webgpu/webnn); empty on native builds.
+	webVersion            string
+	logSeverity           int
+	enableGraphCapture    bool
+	hasFloat64            bool
+	hasFloat16            bool
+	hasBFloat16           bool
+	isFinalized           bool
+	keepModelProto        bool
 }
 
 // SetKeepModelProto controls whether compiled Executable instances retain the graph *onnx.ModelProto.
@@ -65,7 +65,7 @@ func (b *Backend) LogSeverity() int {
 
 // ExecutionProvider returns the execution provider configured for the backend (e.g. "webgpu", "wasm", "cuda", or "").
 func (b *Backend) ExecutionProvider() string {
-	return b.executionProvider
+	return b.executionProviderName
 }
 
 // WebVersion returns the configured web version string (e.g. "dev", "@latest", "1.27", or "").
@@ -123,10 +123,10 @@ func (b *Backend) Description() string {
 	if b.version != "" {
 		verStr = fmt.Sprintf(" v%s", b.version)
 	}
-	if b.executionProvider != "" {
-		return fmt.Sprintf("ONNX Runtime Web%s (%s) compute backend for GoMLX", verStr, b.executionProvider)
+	if b.executionProviderName != "" {
+		return fmt.Sprintf("ONNX Runtime Web%s (%s) compute backend for GoMLX", verStr, b.executionProviderName)
 	}
-	switch b.gpuEP {
+	switch b.executionProvider {
 	case executionprovider.CUDA:
 		return fmt.Sprintf("ONNX Runtime%s (CUDA GPU) compute backend for GoMLX", verStr)
 	case executionprovider.MIGraphX:
@@ -140,10 +140,10 @@ func (b *Backend) NumDevices() int {
 }
 
 func (b *Backend) DeviceDescription(deviceNum compute.DeviceNum) string {
-	if b.executionProvider != "" {
-		return fmt.Sprintf("Web (%s) Default Device", b.executionProvider)
+	if b.executionProviderName != "" {
+		return fmt.Sprintf("Web (%s) Default Device", b.executionProviderName)
 	}
-	switch b.gpuEP {
+	switch b.executionProvider {
 	case executionprovider.CUDA:
 		return "CUDA GPU (ONNX Runtime Default Device)"
 	case executionprovider.MIGraphX:
@@ -160,7 +160,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		DynamicAxes:                 true,
 		DynamicShapes:               compute.DynamicShapesNative,
 	}
-	if b.gpuEP == executionprovider.MIGraphX {
+	if b.executionProvider == executionprovider.MIGraphX {
 		// The MIGraphX execution provider reliably supports only a subset of dtypes;
 		// others (e.g. float64, uint8) either fall back producing incorrect results
 		// or crash inside MIGraphX. Restrict the advertised capabilities accordingly,
@@ -212,7 +212,7 @@ func (b *Backend) Builder(name string) compute.Builder {
 
 		return b.createExecutable(compiled.ModelBytes, compiled.InputNames, compiled.InputShapes, compiled.OutputNames, compiled.OutputShapes, compiled.Model)
 	})
-	gb.SetExecutionProvider(b.executionProvider)
+	gb.SetExecutionProvider(b.executionProviderName)
 	gb.SetLogSeverity(b.logSeverity)
 	return gb
 }

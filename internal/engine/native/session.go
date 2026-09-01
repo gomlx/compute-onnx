@@ -38,7 +38,7 @@ type MIGraphXOptions struct {
 // CreateSession creates an ONNX Runtime DynamicAdvancedSession with the given options.
 // gpuEP selects the GPU execution provider: CUDA, MIGraphX, or CPU only.
 // migraphx may be nil.
-func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, gpuEP executionprovider.ExecutionProviderType, logSeverity int, migraphx *MIGraphXOptions) (*ort.DynamicAdvancedSession, error) {
+func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, gpuEP executionprovider.Type, logSeverity int, migraphx *MIGraphXOptions) (*ort.DynamicAdvancedSession, error) {
 	options, err := ort.NewSessionOptions()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime SessionOptions")
@@ -148,7 +148,7 @@ func WrapCUDAError(err error) error {
 
 // WrapEPError dispatches to the provider-specific error wrapper for the given
 // execution provider, adding helpful troubleshooting messages to known errors.
-func WrapEPError(ep executionprovider.ExecutionProviderType, err error) error {
+func WrapEPError(ep executionprovider.Type, err error) error {
 	if err == nil {
 		return nil
 	}

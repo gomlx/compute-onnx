@@ -80,7 +80,7 @@ func isLibraryPath(part string) bool {
 	return false
 }
 
-func initializeORT(gpuEP executionprovider.ExecutionProviderType, customLibPath string) error {
+func initializeORT(gpuEP executionprovider.Type, customLibPath string) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if isOrtInitialized {
@@ -155,7 +155,7 @@ func initializeORT(gpuEP executionprovider.ExecutionProviderType, customLibPath 
 // parseConfig parses the backend configuration string and returns the selected GPU
 // execution provider ("cuda", "migraphx", or "" for CPU), log severity, custom ORT library path,
 // and the MIGraphX compiled-program cache directory ("" to disable caching).
-func parseConfig(config string) (gpuEP executionprovider.ExecutionProviderType, logSeverity int, customLibPath string, migraphxCacheDir string, err error) {
+func parseConfig(config string) (gpuEP executionprovider.Type, logSeverity int, customLibPath string, migraphxCacheDir string, err error) {
 	gpuEP = executionprovider.CPU
 	hasProvider := false
 	logSeverity = -1 // not set
@@ -260,7 +260,7 @@ func parseConfig(config string) (gpuEP executionprovider.ExecutionProviderType, 
 // If allowDedicatedMigraphxDir is set, an ORT library previously installed in the dedicated
 // MIGraphX directory also qualifies (so that auto-installation is never triggered implicitly
 // by auto-detection).
-func detectGPUProvider(dir string, allowDedicatedMigraphxDir bool) executionprovider.ExecutionProviderType {
+func detectGPUProvider(dir string, allowDedicatedMigraphxDir bool) executionprovider.Type {
 	if cuda.HasNvidiaGPU() && (dir == "" || cuda.IsCUDALibraryAvailable(dir)) {
 		return executionprovider.CUDA
 	}
@@ -304,14 +304,14 @@ func New(config string) (compute.Backend, error) {
 		return nil, err
 	}
 	return &Backend{
-		config:           config,
-		version:          ort.GetVersion(),
-		gpuEP:            gpuEP,
-		migraphxCacheDir: migraphxCacheDir,
-		logSeverity:      logSeverity,
-		hasFloat64:       true,
-		hasFloat16:       true,
-		hasBFloat16:      gpuEP == executionprovider.CUDA,
+		config:            config,
+		version:           ort.GetVersion(),
+		executionProvider: gpuEP,
+		migraphxCacheDir:  migraphxCacheDir,
+		logSeverity:       logSeverity,
+		hasFloat64:        true,
+		hasFloat16:        true,
+		hasBFloat16:       gpuEP == executionprovider.CUDA,
 	}, nil
 }
 
@@ -319,10 +319,10 @@ func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, input
 	outputNames []string, outputShapes []shapes.Shape, modelProto *onnx.ModelProto) (compute.Executable, error) {
 
 	var migraphxOpts *native.MIGraphXOptions
-	if b.gpuEP == executionprovider.MIGraphX && b.migraphxCacheDir != "" {
+	if b.executionProvider == executionprovider.MIGraphX && b.migraphxCacheDir != "" {
 		migraphxOpts = &native.MIGraphXOptions{CacheDir: b.migraphxCacheDir}
 	}
-	session, err := native.CreateSession(modelBytes, inputNames, inputShapes, outputNames, b.gpuEP, b.logSeverity, migraphxOpts)
+	session, err := native.CreateSession(modelBytes, inputNames, inputShapes, outputNames, b.executionProvider, b.logSeverity, migraphxOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +330,7 @@ func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, input
 	if b.keepModelProto {
 		savedModelProto = modelProto
 	}
-	return native.NewExecutable(b, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto, b.gpuEP), nil
+	return native.NewExecutable(b, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto, b.executionProvider), nil
 }
 
 func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shape shapes.Shape) (compute.Buffer, error) {
@@ -342,7 +342,7 @@ func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shap
 }
 
 func (b *Backend) HasSharedBuffers() bool {
-	return b.gpuEP != executionprovider.CUDA
+	return b.executionProvider != executionprovider.CUDA
 }
 
 func (b *Backend) NewSharedBuffer(deviceNum compute.DeviceNum, shape shapes.Shape) (compute.Buffer, any, error) {

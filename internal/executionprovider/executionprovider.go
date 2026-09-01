@@ -9,12 +9,12 @@ import (
 	"strings"
 )
 
-// ExecutionProviderType identifies the ONNX Runtime execution provider used by a native backend.
-type ExecutionProviderType int
+// Type identifies the ONNX Runtime execution provider used by a native backend.
+type Type int
 
 const (
 	// CPU runs on CPU only (the zero value).
-	CPU ExecutionProviderType = iota
+	CPU Type = iota
 	// CUDA runs on an NVIDIA GPU via the CUDA execution provider.
 	CUDA
 	// MIGraphX runs on an AMD GPU via the MIGraphX execution provider. It replaces the older ROCm EP.
@@ -22,7 +22,7 @@ const (
 )
 
 // String returns the canonical name of the execution provider ("cpu", "cuda", or "migraphx").
-func (t ExecutionProviderType) String() string {
+func (t Type) String() string {
 	switch t {
 	case CUDA:
 		return "cuda"
@@ -33,10 +33,10 @@ func (t ExecutionProviderType) String() string {
 	}
 }
 
-// Parse maps a configuration token to an ExecutionProviderType.
+// Parse maps a configuration token to an executionprovider.Type.
 // It accepts the same aliases as the backend config string: "cpu"/"" for CPU,
 // "cuda"/"gpu" for CUDA, and "migraphx"/"rocm"/"amd" for MIGraphX.
-func Parse(s string) (ExecutionProviderType, error) {
+func Parse(s string) (Type, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "cpu":
 		return CPU, nil
