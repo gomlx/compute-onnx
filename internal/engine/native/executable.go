@@ -30,14 +30,14 @@ const migraphxMaxWarmUpRuns = 8
 
 // Executable implements [compute.Executable] for ONNX Runtime native execution (CPU & CUDA).
 type Executable struct {
-	backend          compute.Backend
-	session          *ort.DynamicAdvancedSession
-	inputNames       []string
-	inputShapes      []shapes.Shape
-	outputNames      []string
-	outputShapes     []shapes.Shape
-	reusableWrappers []OrtTensorWrapper
-	gpuEP            executionprovider.Type // GPU execution provider: CUDA, MIGraphX, or CPU only.
+	backend           compute.Backend
+	session           *ort.DynamicAdvancedSession
+	inputNames        []string
+	inputShapes       []shapes.Shape
+	outputNames       []string
+	outputShapes      []shapes.Shape
+	reusableWrappers  []OrtTensorWrapper
+	executionProvider executionprovider.Type // GPU execution provider: CUDA, MIGraphX, or CPU only.
 
 	// warmedShapes tracks which input-shape signatures have already been through the
 	// MIGraphX first-eval warm-up (see migraphxWorkaround). Only used when gpuEP == MIGraphX.
@@ -67,17 +67,17 @@ func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 	nOutputs := len(outputShapes)
 
 	e := &Executable{
-		backend:          backend,
-		session:          session,
-		inputNames:       inputNames,
-		inputShapes:      inputShapes,
-		outputNames:      outputNames,
-		outputShapes:     outputShapes,
-		cachedOrtInputs:  make([]ort.Value, nInputs),
-		cachedOutWraps:   make([]OrtTensorWrapper, nOutputs),
-		cachedOrtOutputs: make([]ort.Value, nOutputs),
-		modelProto:       modelProto,
-		gpuEP:            gpuEP,
+		backend:           backend,
+		session:           session,
+		inputNames:        inputNames,
+		inputShapes:       inputShapes,
+		outputNames:       outputNames,
+		outputShapes:      outputShapes,
+		cachedOrtInputs:   make([]ort.Value, nInputs),
+		cachedOutWraps:    make([]OrtTensorWrapper, nOutputs),
+		cachedOrtOutputs:  make([]ort.Value, nOutputs),
+		modelProto:        modelProto,
+		executionProvider: gpuEP,
 	}
 	if gpuEP == executionprovider.MIGraphX {
 		e.warmedShapes = make(map[string]bool)
@@ -189,7 +189,7 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 	}
 
 	defer runtime.KeepAlive(inputs)
-	if e.gpuEP == executionprovider.CUDA {
+	if e.executionProvider == executionprovider.CUDA {
 		// CUDA path: outputs are bound to device memory and stay GPU-resident.
 		ortInputs := make([]ort.Value, len(e.inputNames))
 		var dummyWrapper OrtTensorWrapper
@@ -352,7 +352,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 	// The MIGraphX EP unreliably copies results into caller-preallocated (CPU) output
 	// buffers, so for it we let ONNX Runtime allocate the outputs instead and wrap
 	// them afterwards -- the same thing already done for dynamic shapes.
-	preallocOutputs := e.gpuEP != executionprovider.MIGraphX
+	preallocOutputs := e.executionProvider != executionprovider.MIGraphX
 
 	for i, sh := range e.outputShapes {
 		if sh.IsDynamic() || !preallocOutputs {
@@ -409,7 +409,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	if e.gpuEP == executionprovider.MIGraphX {
+	if e.executionProvider == executionprovider.MIGraphX {
 		if err := e.migraphxWorkaround(); err != nil {
 			return nil, err
 		}
@@ -427,7 +427,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 		}
 		return nil, errors.Wrap(err, "onnxruntime execution failed")
 	}
-	if e.gpuEP == executionprovider.MIGraphX {
+	if e.executionProvider == executionprovider.MIGraphX {
 		// The MIGraphX EP leaves GPU work in flight; synchronize so that output
 		// buffers (and inputs of the next execution) are fully materialized.
 		if err := ort.HipDeviceSynchronize(); err != nil {
@@ -458,7 +458,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 		}
 
 		execBackpointer := e
-		if e.gpuEP == executionprovider.CUDA {
+		if e.executionProvider == executionprovider.CUDA {
 			// CUDA buffers are never recycled via the executable.
 			execBackpointer = nil
 		}
@@ -467,7 +467,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 			wrapper:           outWrappers[i],
 			shape:             actualShape,
 			device:            defaultDevice,
-			executionProvider: e.gpuEP,
+			executionProvider: e.executionProvider,
 			executable:        execBackpointer,
 		}
 		outWrappers[i] = nil
