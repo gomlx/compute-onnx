@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
@@ -323,7 +324,7 @@ func (f *Function) Reverse(x compute.Value, axes ...int) (compute.Value, error) 
 		return xNode, nil
 	}
 
-	if f.isWebGPU() {
+	if f.executionProvider == executionprovider.WebGPU {
 		return f.reverseForWebGPU(xNode, axes)
 	}
 
@@ -1303,7 +1304,7 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 
 // CumSum implements the ONNX CumSum operation.
 func (f *Function) CumSum(operand compute.Value, axis int, options compute.CumSumOptions) (compute.Value, error) {
-	if options.Reverse && f.isWebGPU() {
+	if options.Reverse && f.executionProvider == executionprovider.WebGPU {
 		// Decompose reverse:
 		// FutureWork: if WebGPU adds support for reverse, we can remove this.
 		revIn, err := f.Reverse(operand, axis)

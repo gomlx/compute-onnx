@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapeinference"
@@ -199,7 +200,7 @@ func (f *Function) ReduceWindow(
 			break
 		}
 	}
-	if hasWindowDilation && f.isWebGPU() {
+	if hasWindowDilation && f.executionProvider == executionprovider.WebGPU {
 		if f.LogSeverity() >= 0 && f.LogSeverity() <= 2 {
 			klog.Infof("ReduceWindow implemented with individual slices for WebGPU")
 		}
