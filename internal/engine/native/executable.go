@@ -322,11 +322,11 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 		}
 		ortShape := ort.NewShape(toInt64s(actualShape.Dimensions)...)
 		outBuffers[i] = &Buffer{
-			backend: e.backend,
-			wrapper: NewGpuTensorWrapper(val, ortShape, actualShape.DType),
-			shape:   actualShape,
-			device:  defaultDevice,
-			isCUDA:  true,
+			backend:           e.backend,
+			wrapper:           NewGpuTensorWrapper(val, ortShape, actualShape.DType),
+			shape:             actualShape,
+			device:            defaultDevice,
+			executionProvider: executionprovider.CUDA,
 		}
 	}
 
@@ -463,12 +463,12 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 			execBackpointer = nil
 		}
 		outBuffers[i] = &Buffer{
-			backend:    e.backend,
-			wrapper:    outWrappers[i],
-			shape:      actualShape,
-			device:     defaultDevice,
-			isShared:   true,
-			executable: execBackpointer,
+			backend:           e.backend,
+			wrapper:           outWrappers[i],
+			shape:             actualShape,
+			device:            defaultDevice,
+			executionProvider: e.gpuEP,
+			executable:        execBackpointer,
 		}
 		outWrappers[i] = nil
 	}

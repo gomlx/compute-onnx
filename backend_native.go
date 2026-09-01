@@ -338,7 +338,7 @@ func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shap
 	if err != nil {
 		return nil, err
 	}
-	return native.NewBuffer(b, wrapper, shape, deviceNum, true, false, nil), nil
+	return native.NewBuffer(b, wrapper, shape, deviceNum, b.executionProvider, nil), nil
 }
 
 func (b *Backend) HasSharedBuffers() bool {
@@ -351,6 +351,6 @@ func (b *Backend) NewSharedBuffer(deviceNum compute.DeviceNum, shape shapes.Shap
 		return nil, nil, err
 	}
 	flat := wrapper.GetData()
-	buf := native.NewBuffer(b, wrapper, shape, deviceNum, true, false, nil)
+	buf := native.NewBuffer(b, wrapper, shape, deviceNum, b.executionProvider, nil)
 	return buf, flat, nil
 }
