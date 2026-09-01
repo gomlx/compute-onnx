@@ -45,12 +45,15 @@ Configuration can be specified in the `GOMLX_BACKEND` environment variable using
   ```bash
   GOMLX_BACKEND=onnx:cuda
   ```
-- **`migraphx`** / **`rocm`** / **`amd`**: Force AMD GPU execution (uses ONNX Runtime MIGraphX Execution Provider).
+- **`migraphx`** / **`rocm`** / **`amd`** (EXPERIMENTAL): Force AMD GPU execution (uses ONNX Runtime MIGraphX Execution Provider).
   Requires ROCm and MIGraphX to be installed (`sudo apt install migraphx migraphx-dev half`). If no ORT library with the
   MIGraphX provider is found, one is automatically installed from [AMD's manylinux wheels](https://repo.radeon.com/rocm/manylinux/)
   matching the local ROCm version — it can also be installed manually with
   `go run github.com/gomlx/compute-onnx/cmd/onnxruntime_installer -migraphx`.
-  Note: only float32/int32/int64 graphs are supported, and models with scalar (0-dimensional) inputs fall back to CPU.
+  Notes:
+  - Only float32/int32/int64 graphs are supported;
+  - Models with scalar (0-dimensional) inputs fails (there is a bug upstream);
+  - Buffers are always tranferred back to CPU (host), which makes training slower (TODO fix).
   ```bash
   GOMLX_BACKEND=onnx:migraphx
   ```
