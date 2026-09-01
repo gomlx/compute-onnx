@@ -40,7 +40,7 @@ type Executable struct {
 	executionProvider executionprovider.Type // GPU execution provider: CUDA, MIGraphX, or CPU only.
 
 	// warmedShapes tracks which input-shape signatures have already been through the
-	// MIGraphX first-eval warm-up (see migraphxWorkaround). Only used when gpuEP == MIGraphX.
+	// MIGraphX first-eval warm-up (see migraphxWorkaround). Only used when executionProvider == MIGraphX.
 	warmedShapes map[string]bool
 
 	// Pre-allocated slices reused across Execute calls (CPU path only, single-threaded).
@@ -57,11 +57,11 @@ type Executable struct {
 var _ compute.Executable = (*Executable)(nil)
 
 // NewExecutable creates a new Native Executable.
-// gpuEP is the GPU execution provider used by the session: CUDA, MIGraphX, or CPU only.
+// The executionProvider is inherited from the Backend's session: CUDA, MIGraphX, or CPU only.
 func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 	inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape,
-	modelProto *onnx.ModelProto, gpuEP executionprovider.Type) *Executable {
+	modelProto *onnx.ModelProto, executionProvider executionprovider.Type) *Executable {
 
 	nInputs := len(inputNames)
 	nOutputs := len(outputShapes)
@@ -77,9 +77,9 @@ func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 		cachedOutWraps:    make([]OrtTensorWrapper, nOutputs),
 		cachedOrtOutputs:  make([]ort.Value, nOutputs),
 		modelProto:        modelProto,
-		executionProvider: gpuEP,
+		executionProvider: executionProvider,
 	}
-	if gpuEP == executionprovider.MIGraphX {
+	if executionProvider == executionprovider.MIGraphX {
 		e.warmedShapes = make(map[string]bool)
 	}
 	runtime.SetFinalizer(e, (*Executable).Finalize)

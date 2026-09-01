@@ -115,7 +115,7 @@ func TestParseConfig(t *testing.T) {
 			}
 			if !tt.wantErr {
 				if gotEP != tt.wantEP {
-					t.Errorf("got gpuEP = %v, want %v", gotEP, tt.wantEP)
+					t.Errorf("got executionProvider = %v, want %v", gotEP, tt.wantEP)
 				}
 				if gotLog != tt.wantLog {
 					t.Errorf("gotLog = %v, want %v", gotLog, tt.wantLog)

@@ -36,16 +36,15 @@ type MIGraphXOptions struct {
 }
 
 // CreateSession creates an ONNX Runtime DynamicAdvancedSession with the given options.
-// gpuEP selects the GPU execution provider: CUDA, MIGraphX, or CPU only.
-// migraphx may be nil.
-func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, gpuEP executionprovider.Type, logSeverity int, migraphx *MIGraphXOptions) (*ort.DynamicAdvancedSession, error) {
+// The migraphxOptions arguments is only used for MIGraphX execution provider and may be nil.
+func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, executionProvider executionprovider.Type, logSeverity int, migraphxOptions *MIGraphXOptions) (*ort.DynamicAdvancedSession, error) {
 	options, err := ort.NewSessionOptions()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime SessionOptions")
 	}
 	defer options.Destroy()
 
-	switch gpuEP {
+	switch executionProvider {
 	case executionprovider.CUDA:
 		cudaOpts, err := ort.NewCUDAProviderOptions()
 		if err != nil {
@@ -71,17 +70,17 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 			return nil, errors.Errorf("MIGraphX execution provider does not support scalar (0-dimensional) inputs; " +
 				"run this model on CPU instead (maybe by setting GOMLX_BACKEND=\"onnx:cpu\")")
 		}
-		migraphxOpts := &ort.MIGraphXProviderOptions{DeviceID: 0}
-		if migraphx != nil && migraphx.CacheDir != "" {
-			if err := os.MkdirAll(migraphx.CacheDir, 0o755); err != nil {
-				return nil, WrapMIGraphXError(errors.Wrapf(err, "failed to create MIGraphX cache directory %q", migraphx.CacheDir))
+		migraphxProviderOptions := &ort.MIGraphXProviderOptions{DeviceID: 0}
+		if migraphxOptions != nil && migraphxOptions.CacheDir != "" {
+			if err := os.MkdirAll(migraphxOptions.CacheDir, 0o755); err != nil {
+				return nil, WrapMIGraphXError(errors.Wrapf(err, "failed to create MIGraphX cache directory %q", migraphxOptions.CacheDir))
 			}
-			if err := os.Setenv("ORT_MIGRAPHX_MODEL_CACHE_PATH", migraphx.CacheDir); err != nil {
+			if err := os.Setenv("ORT_MIGRAPHX_MODEL_CACHE_PATH", migraphxOptions.CacheDir); err != nil {
 				return nil, WrapMIGraphXError(errors.Wrapf(err, "failed to set ORT_MIGRAPHX_MODEL_CACHE_PATH"))
 			}
-			klog.V(1).Infof("MIGraphX compiled-program caching enabled in %q", migraphx.CacheDir)
+			klog.V(1).Infof("MIGraphX compiled-program caching enabled in %q", migraphxOptions.CacheDir)
 		}
-		err := options.AppendExecutionProviderMIGraphX(migraphxOpts)
+		err := options.AppendExecutionProviderMIGraphX(migraphxProviderOptions)
 		if err != nil {
 			return nil, WrapMIGraphXError(errors.Wrap(err, "failed to append MIGraphX execution provider to SessionOptions"))
 		}
@@ -89,7 +88,7 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 		// CPU only.
 
 	default:
-		return nil, errors.Errorf("unknown gpu execution provider %q: expected \"cuda\", \"migraphx\" or \"\"", gpuEP)
+		return nil, errors.Errorf("unknown gpu execution provider %q: expected \"cuda\", \"migraphx\" or \"\"", executionProvider)
 	}
 
 	logSev := logSeverity
@@ -116,7 +115,7 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 			strings.Contains(errStr, "Could not find an implementation") {
 			return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support operation: %s", errStr)
 		}
-		return nil, WrapEPError(gpuEP, errors.Wrap(err, "failed to create ONNX Runtime session"))
+		return nil, WrapEPError(executionProvider, errors.Wrap(err, "failed to create ONNX Runtime session"))
 	}
 
 	return session, nil

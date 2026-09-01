@@ -80,7 +80,7 @@ func isLibraryPath(part string) bool {
 	return false
 }
 
-func initializeORT(gpuEP executionprovider.Type, customLibPath string) error {
+func initializeORT(executionProvider executionprovider.Type, customLibPath string) error {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if isOrtInitialized {
@@ -92,7 +92,7 @@ func initializeORT(gpuEP executionprovider.Type, customLibPath string) error {
 		path = os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
 		if path == "" {
 			installDir, err := onnxruntime.GetInstallPath()
-			if gpuEP == executionprovider.MIGraphX {
+			if executionProvider == executionprovider.MIGraphX {
 				// The AMD ROCm build installs into its own directory, so it does not
 				// clobber the standard (CPU/CUDA) library.
 				installDir, err = onnxruntime.GetMigraphxInstallPath()
@@ -103,7 +103,7 @@ func initializeORT(gpuEP executionprovider.Type, customLibPath string) error {
 					targetPath := filepath.Join(installDir, libFilename)
 					if _, err := os.Stat(targetPath); err == nil {
 						useInstalled := true
-						switch gpuEP {
+						switch executionProvider {
 						case executionprovider.CUDA:
 							cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
 							if _, err := os.Stat(cudaLibPath); err != nil {
@@ -132,11 +132,11 @@ func initializeORT(gpuEP executionprovider.Type, customLibPath string) error {
 			return errors.Errorf("ONNX Runtime library not found (ONNXRUNTIME_SHARED_LIBRARY_PATH is not set) and auto-installation is disabled via %s or EnableAutoInstall(false)", NoAutoInstallEnv)
 		}
 		var err error
-		switch gpuEP {
+		switch executionProvider {
 		case executionprovider.MIGraphX:
 			path, err = onnxruntime.InstallMigraphx("", "", false)
 		default:
-			path, err = onnxruntime.Install(onnxruntime.DefaultVersion, gpuEP == executionprovider.CUDA, "", "", false)
+			path, err = onnxruntime.Install(onnxruntime.DefaultVersion, executionProvider == executionprovider.CUDA, "", "", false)
 		}
 		if err != nil {
 			return errors.Wrap(err, "failed to automatically install ONNX Runtime library")
@@ -155,8 +155,8 @@ func initializeORT(gpuEP executionprovider.Type, customLibPath string) error {
 // parseConfig parses the backend configuration string and returns the selected GPU
 // execution provider ("cuda", "migraphx", or "" for CPU), log severity, custom ORT library path,
 // and the MIGraphX compiled-program cache directory ("" to disable caching).
-func parseConfig(config string) (gpuEP executionprovider.Type, logSeverity int, customLibPath string, migraphxCacheDir string, err error) {
-	gpuEP = executionprovider.CPU
+func parseConfig(config string) (executionProvider executionprovider.Type, logSeverity int, customLibPath string, migraphxCacheDir string, err error) {
+	executionProvider = executionprovider.CPU
 	hasProvider := false
 	logSeverity = -1 // not set
 	migraphxCacheDir = os.Getenv("GOMLX_MIGRAPHX_CACHE_DIR")
@@ -218,13 +218,13 @@ func parseConfig(config string) (gpuEP executionprovider.Type, logSeverity int, 
 			partLower := strings.ToLower(part)
 			switch partLower {
 			case "cuda", "gpu":
-				gpuEP = executionprovider.CUDA
+				executionProvider = executionprovider.CUDA
 				hasProvider = true
 			case "migraphx", "rocm", "amd":
-				gpuEP = executionprovider.MIGraphX
+				executionProvider = executionprovider.MIGraphX
 				hasProvider = true
 			case "cpu":
-				gpuEP = executionprovider.CPU
+				executionProvider = executionprovider.CPU
 				hasProvider = true
 			default:
 				if isLibraryPath(part) {
@@ -239,18 +239,18 @@ func parseConfig(config string) (gpuEP executionprovider.Type, logSeverity int, 
 	if !hasProvider {
 		switch {
 		case customLibPath != "":
-			gpuEP = detectGPUProvider(filepath.Dir(customLibPath), false)
+			executionProvider = detectGPUProvider(filepath.Dir(customLibPath), false)
 		case os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH") != "":
-			gpuEP = detectGPUProvider(filepath.Dir(os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")), false)
+			executionProvider = detectGPUProvider(filepath.Dir(os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")), false)
 		default:
 			dir, err := onnxruntime.GetInstallPath()
 			if err != nil {
 				dir = ""
 			}
-			gpuEP = detectGPUProvider(dir, true)
+			executionProvider = detectGPUProvider(dir, true)
 		}
 	}
-	return gpuEP, logSeverity, customLibPath, migraphxCacheDir, nil
+	return executionProvider, logSeverity, customLibPath, migraphxCacheDir, nil
 }
 
 // detectGPUProvider auto-detects which GPU execution provider to use: "cuda" if an NVIDIA GPU
@@ -283,12 +283,12 @@ func New(config string) (compute.Backend, error) {
 		return nil, errors.Errorf("onnxruntime backend is not supported on platform %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
-	gpuEP, logSeverity, customLibPath, migraphxCacheDir, err := parseConfig(config)
+	executionProvider, logSeverity, customLibPath, migraphxCacheDir, err := parseConfig(config)
 	if err != nil {
 		return nil, err
 	}
 
-	switch gpuEP {
+	switch executionProvider {
 	case executionprovider.CUDA:
 		if err := cuda.CheckCUDAAndCUDNN(); err != nil {
 			return nil, err
@@ -299,19 +299,19 @@ func New(config string) (compute.Backend, error) {
 		}
 	}
 
-	err = initializeORT(gpuEP, customLibPath)
+	err = initializeORT(executionProvider, customLibPath)
 	if err != nil {
 		return nil, err
 	}
 	return &Backend{
 		config:            config,
 		version:           ort.GetVersion(),
-		executionProvider: gpuEP,
+		executionProvider: executionProvider,
 		migraphxCacheDir:  migraphxCacheDir,
 		logSeverity:       logSeverity,
 		hasFloat64:        true,
 		hasFloat16:        true,
-		hasBFloat16:       gpuEP == executionprovider.CUDA,
+		hasBFloat16:       executionProvider == executionprovider.CUDA,
 	}, nil
 }
 
