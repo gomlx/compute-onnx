@@ -46,7 +46,7 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 	defer options.Destroy()
 
 	switch gpuEP {
-	case executionprovider.ExecutionProviderCUDA:
+	case executionprovider.CUDA:
 		cudaOpts, err := ort.NewCUDAProviderOptions()
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to create ONNX Runtime CUDAProviderOptions")
@@ -62,11 +62,12 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 			return nil, WrapCUDAError(errors.Wrap(err, "failed to append CUDA execution provider to SessionOptions"))
 		}
 
-	case executionprovider.ExecutionProviderMIGraphX:
+	case executionprovider.MIGraphX:
 		// Upstream MIGraphX bug workaround: evaluating a program with scalar
 		// (0-dimensional) inputs aborts inside migraphx::program::eval
 		// ("contexts.size() == 1" assertion). Such models fall back to CPU execution.
 		if hasScalarInput(inputShapes) {
+			// TODO: Report an issue in https://github.com/ROCm/AMDMIGraphX .
 			return nil, errors.Errorf("MIGraphX execution provider does not support scalar (0-dimensional) inputs; " +
 				"run this model on CPU instead (maybe by setting GOMLX_BACKEND=\"onnx:cpu\")")
 		}
@@ -84,7 +85,7 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 		if err != nil {
 			return nil, WrapMIGraphXError(errors.Wrap(err, "failed to append MIGraphX execution provider to SessionOptions"))
 		}
-	case executionprovider.ExecutionProviderCPU:
+	case executionprovider.CPU:
 		// CPU only.
 
 	default:
@@ -152,9 +153,9 @@ func WrapEPError(ep executionprovider.ExecutionProviderType, err error) error {
 		return nil
 	}
 	switch ep {
-	case executionprovider.ExecutionProviderCUDA:
+	case executionprovider.CUDA:
 		return WrapCUDAError(err)
-	case executionprovider.ExecutionProviderMIGraphX:
+	case executionprovider.MIGraphX:
 		return WrapMIGraphXError(err)
 	default:
 		return err

@@ -13,20 +13,20 @@ import (
 type ExecutionProviderType int
 
 const (
-	// ExecutionProviderCPU runs on CPU only (the zero value).
-	ExecutionProviderCPU ExecutionProviderType = iota
-	// ExecutionProviderCUDA runs on an NVIDIA GPU via the CUDA execution provider.
-	ExecutionProviderCUDA
-	// ExecutionProviderMIGraphX runs on an AMD GPU via the MIGraphX execution provider.
-	ExecutionProviderMIGraphX
+	// CPU runs on CPU only (the zero value).
+	CPU ExecutionProviderType = iota
+	// CUDA runs on an NVIDIA GPU via the CUDA execution provider.
+	CUDA
+	// MIGraphX runs on an AMD GPU via the MIGraphX execution provider. It replaces the older ROCm EP.
+	MIGraphX
 )
 
 // String returns the canonical name of the execution provider ("cpu", "cuda", or "migraphx").
 func (t ExecutionProviderType) String() string {
 	switch t {
-	case ExecutionProviderCUDA:
+	case CUDA:
 		return "cuda"
-	case ExecutionProviderMIGraphX:
+	case MIGraphX:
 		return "migraphx"
 	default:
 		return "cpu"
@@ -39,12 +39,12 @@ func (t ExecutionProviderType) String() string {
 func Parse(s string) (ExecutionProviderType, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "cpu":
-		return ExecutionProviderCPU, nil
+		return CPU, nil
 	case "cuda", "gpu":
-		return ExecutionProviderCUDA, nil
+		return CUDA, nil
 	case "migraphx", "rocm", "amd":
-		return ExecutionProviderMIGraphX, nil
+		return MIGraphX, nil
 	default:
-		return ExecutionProviderCPU, fmt.Errorf("invalid execution provider %q: expected \"cpu\", \"cuda\", or \"migraphx\"", s)
+		return CPU, fmt.Errorf("invalid execution provider %q: expected \"cpu\", \"cuda\", or \"migraphx\"", s)
 	}
 }

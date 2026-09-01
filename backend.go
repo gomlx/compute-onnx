@@ -127,9 +127,9 @@ func (b *Backend) Description() string {
 		return fmt.Sprintf("ONNX Runtime Web%s (%s) compute backend for GoMLX", verStr, b.executionProvider)
 	}
 	switch b.gpuEP {
-	case executionprovider.ExecutionProviderCUDA:
+	case executionprovider.CUDA:
 		return fmt.Sprintf("ONNX Runtime%s (CUDA GPU) compute backend for GoMLX", verStr)
-	case executionprovider.ExecutionProviderMIGraphX:
+	case executionprovider.MIGraphX:
 		return fmt.Sprintf("ONNX Runtime%s (MIGraphX GPU) compute backend for GoMLX", verStr)
 	}
 	return fmt.Sprintf("ONNX Runtime%s (CPU) compute backend for GoMLX", verStr)
@@ -144,9 +144,9 @@ func (b *Backend) DeviceDescription(deviceNum compute.DeviceNum) string {
 		return fmt.Sprintf("Web (%s) Default Device", b.executionProvider)
 	}
 	switch b.gpuEP {
-	case executionprovider.ExecutionProviderCUDA:
+	case executionprovider.CUDA:
 		return "CUDA GPU (ONNX Runtime Default Device)"
-	case executionprovider.ExecutionProviderMIGraphX:
+	case executionprovider.MIGraphX:
 		return "MIGraphX GPU (ONNX Runtime Default Device)"
 	}
 	return "CPU (ONNX Runtime Default Device)"
@@ -160,7 +160,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		DynamicAxes:                 true,
 		DynamicShapes:               compute.DynamicShapesNative,
 	}
-	if b.gpuEP == executionprovider.ExecutionProviderMIGraphX {
+	if b.gpuEP == executionprovider.MIGraphX {
 		// The MIGraphX execution provider reliably supports only a subset of dtypes;
 		// others (e.g. float64, uint8) either fall back producing incorrect results
 		// or crash inside MIGraphX. Restrict the advertised capabilities accordingly,

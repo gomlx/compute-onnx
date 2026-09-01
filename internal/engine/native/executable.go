@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"unsafe"
+
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
@@ -21,7 +23,6 @@ import (
 	"github.com/gomlx/compute/support/humanize"
 	"github.com/pkg/errors"
 	"k8s.io/klog/v2"
-	"unsafe"
 )
 
 // migraphxMaxWarmUpRuns caps the number of per-shape warm-up runs (see migraphxWorkaround).
@@ -78,7 +79,7 @@ func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 		modelProto:       modelProto,
 		gpuEP:            gpuEP,
 	}
-	if gpuEP == executionprovider.ExecutionProviderMIGraphX {
+	if gpuEP == executionprovider.MIGraphX {
 		e.warmedShapes = make(map[string]bool)
 	}
 	runtime.SetFinalizer(e, (*Executable).Finalize)
@@ -188,7 +189,7 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 	}
 
 	defer runtime.KeepAlive(inputs)
-	if e.gpuEP == executionprovider.ExecutionProviderCUDA {
+	if e.gpuEP == executionprovider.CUDA {
 		// CUDA path: outputs are bound to device memory and stay GPU-resident.
 		ortInputs := make([]ort.Value, len(e.inputNames))
 		var dummyWrapper OrtTensorWrapper
@@ -351,7 +352,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 	// The MIGraphX EP unreliably copies results into caller-preallocated (CPU) output
 	// buffers, so for it we let ONNX Runtime allocate the outputs instead and wrap
 	// them afterwards -- the same thing already done for dynamic shapes.
-	preallocOutputs := e.gpuEP != executionprovider.ExecutionProviderMIGraphX
+	preallocOutputs := e.gpuEP != executionprovider.MIGraphX
 
 	for i, sh := range e.outputShapes {
 		if sh.IsDynamic() || !preallocOutputs {
@@ -408,7 +409,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	if e.gpuEP == executionprovider.ExecutionProviderMIGraphX {
+	if e.gpuEP == executionprovider.MIGraphX {
 		if err := e.migraphxWorkaround(); err != nil {
 			return nil, err
 		}
@@ -426,7 +427,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 		}
 		return nil, errors.Wrap(err, "onnxruntime execution failed")
 	}
-	if e.gpuEP == executionprovider.ExecutionProviderMIGraphX {
+	if e.gpuEP == executionprovider.MIGraphX {
 		// The MIGraphX EP leaves GPU work in flight; synchronize so that output
 		// buffers (and inputs of the next execution) are fully materialized.
 		if err := ort.HipDeviceSynchronize(); err != nil {
@@ -457,7 +458,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 		}
 
 		execBackpointer := e
-		if e.gpuEP == executionprovider.ExecutionProviderCUDA {
+		if e.gpuEP == executionprovider.CUDA {
 			// CUDA buffers are never recycled via the executable.
 			execBackpointer = nil
 		}

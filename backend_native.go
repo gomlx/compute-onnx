@@ -92,7 +92,7 @@ func initializeORT(gpuEP executionprovider.ExecutionProviderType, customLibPath 
 		path = os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
 		if path == "" {
 			installDir, err := onnxruntime.GetInstallPath()
-			if gpuEP == executionprovider.ExecutionProviderMIGraphX {
+			if gpuEP == executionprovider.MIGraphX {
 				// The AMD ROCm build installs into its own directory, so it does not
 				// clobber the standard (CPU/CUDA) library.
 				installDir, err = onnxruntime.GetMigraphxInstallPath()
@@ -104,12 +104,12 @@ func initializeORT(gpuEP executionprovider.ExecutionProviderType, customLibPath 
 					if _, err := os.Stat(targetPath); err == nil {
 						useInstalled := true
 						switch gpuEP {
-						case executionprovider.ExecutionProviderCUDA:
+						case executionprovider.CUDA:
 							cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
 							if _, err := os.Stat(cudaLibPath); err != nil {
 								useInstalled = false
 							}
-						case executionprovider.ExecutionProviderMIGraphX:
+						case executionprovider.MIGraphX:
 							if !rocm.HasMigraphxExecutionProvider(installDir) {
 								useInstalled = false
 							}
@@ -133,10 +133,10 @@ func initializeORT(gpuEP executionprovider.ExecutionProviderType, customLibPath 
 		}
 		var err error
 		switch gpuEP {
-		case executionprovider.ExecutionProviderMIGraphX:
+		case executionprovider.MIGraphX:
 			path, err = onnxruntime.InstallMigraphx("", "", false)
 		default:
-			path, err = onnxruntime.Install(onnxruntime.DefaultVersion, gpuEP == executionprovider.ExecutionProviderCUDA, "", "", false)
+			path, err = onnxruntime.Install(onnxruntime.DefaultVersion, gpuEP == executionprovider.CUDA, "", "", false)
 		}
 		if err != nil {
 			return errors.Wrap(err, "failed to automatically install ONNX Runtime library")
@@ -156,7 +156,7 @@ func initializeORT(gpuEP executionprovider.ExecutionProviderType, customLibPath 
 // execution provider ("cuda", "migraphx", or "" for CPU), log severity, custom ORT library path,
 // and the MIGraphX compiled-program cache directory ("" to disable caching).
 func parseConfig(config string) (gpuEP executionprovider.ExecutionProviderType, logSeverity int, customLibPath string, migraphxCacheDir string, err error) {
-	gpuEP = executionprovider.ExecutionProviderCPU
+	gpuEP = executionprovider.CPU
 	hasProvider := false
 	logSeverity = -1 // not set
 	migraphxCacheDir = os.Getenv("GOMLX_MIGRAPHX_CACHE_DIR")
@@ -166,7 +166,7 @@ func parseConfig(config string) (gpuEP executionprovider.ExecutionProviderType, 
 			var errEnv error
 			config, errEnv = ParseGOMLXBackendEnv(envVal)
 			if errEnv != nil {
-				return executionprovider.ExecutionProviderCPU, 0, "", "", errEnv
+				return executionprovider.CPU, 0, "", "", errEnv
 			}
 		}
 	} else if strings.Contains(config, ":") || strings.EqualFold(config, "onnx") || strings.EqualFold(config, "onnxruntime") {
@@ -174,7 +174,7 @@ func parseConfig(config string) (gpuEP executionprovider.ExecutionProviderType, 
 		if errEnv == nil {
 			config = parsed
 		} else if !isLibraryPath(config) && !strings.Contains(config, "=") {
-			return executionprovider.ExecutionProviderCPU, 0, "", "", errEnv
+			return executionprovider.CPU, 0, "", "", errEnv
 		}
 	}
 
@@ -203,7 +203,7 @@ func parseConfig(config string) (gpuEP executionprovider.ExecutionProviderType, 
 			if key == "log" {
 				var level int
 				if _, err := fmt.Sscanf(val, "%d", &level); err != nil {
-					return executionprovider.ExecutionProviderCPU, 0, "", "", errors.Errorf("invalid log level: %q", val)
+					return executionprovider.CPU, 0, "", "", errors.Errorf("invalid log level: %q", val)
 				}
 				severity := max(3-level, 0)
 				logSeverity = severity
@@ -212,25 +212,25 @@ func parseConfig(config string) (gpuEP executionprovider.ExecutionProviderType, 
 			} else if key == "web_version" || key == "webversion" {
 				// Ignored on native desktop platform.
 			} else {
-				return executionprovider.ExecutionProviderCPU, 0, "", "", errors.Errorf("unknown config option: %q", key)
+				return executionprovider.CPU, 0, "", "", errors.Errorf("unknown config option: %q", key)
 			}
 		} else {
 			partLower := strings.ToLower(part)
 			switch partLower {
 			case "cuda", "gpu":
-				gpuEP = executionprovider.ExecutionProviderCUDA
+				gpuEP = executionprovider.CUDA
 				hasProvider = true
 			case "migraphx", "rocm", "amd":
-				gpuEP = executionprovider.ExecutionProviderMIGraphX
+				gpuEP = executionprovider.MIGraphX
 				hasProvider = true
 			case "cpu":
-				gpuEP = executionprovider.ExecutionProviderCPU
+				gpuEP = executionprovider.CPU
 				hasProvider = true
 			default:
 				if isLibraryPath(part) {
 					customLibPath = part
 				} else {
-					return executionprovider.ExecutionProviderCPU, 0, "", "", errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"migraphx\", path to ORT library, or key=value option", part)
+					return executionprovider.CPU, 0, "", "", errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"migraphx\", path to ORT library, or key=value option", part)
 				}
 			}
 		}
@@ -262,19 +262,19 @@ func parseConfig(config string) (gpuEP executionprovider.ExecutionProviderType, 
 // by auto-detection).
 func detectGPUProvider(dir string, allowDedicatedMigraphxDir bool) executionprovider.ExecutionProviderType {
 	if cuda.HasNvidiaGPU() && (dir == "" || cuda.IsCUDALibraryAvailable(dir)) {
-		return executionprovider.ExecutionProviderCUDA
+		return executionprovider.CUDA
 	}
 	if rocm.HasAMDGPU() {
 		if dir == "" || rocm.HasMigraphxExecutionProvider(dir) {
-			return executionprovider.ExecutionProviderMIGraphX
+			return executionprovider.MIGraphX
 		}
 		if allowDedicatedMigraphxDir {
 			if migraphxDir, err := onnxruntime.GetMigraphxInstallPath(); err == nil && rocm.HasMigraphxExecutionProvider(migraphxDir) {
-				return executionprovider.ExecutionProviderMIGraphX
+				return executionprovider.MIGraphX
 			}
 		}
 	}
-	return executionprovider.ExecutionProviderCPU
+	return executionprovider.CPU
 }
 
 // New creates a new ONNX Runtime backend instance with the given configuration string.
@@ -289,11 +289,11 @@ func New(config string) (compute.Backend, error) {
 	}
 
 	switch gpuEP {
-	case executionprovider.ExecutionProviderCUDA:
+	case executionprovider.CUDA:
 		if err := cuda.CheckCUDAAndCUDNN(); err != nil {
 			return nil, err
 		}
-	case executionprovider.ExecutionProviderMIGraphX:
+	case executionprovider.MIGraphX:
 		if err := rocm.CheckROCmAndMIGraphX(); err != nil {
 			return nil, err
 		}
@@ -311,7 +311,7 @@ func New(config string) (compute.Backend, error) {
 		logSeverity:      logSeverity,
 		hasFloat64:       true,
 		hasFloat16:       true,
-		hasBFloat16:      gpuEP == executionprovider.ExecutionProviderCUDA,
+		hasBFloat16:      gpuEP == executionprovider.CUDA,
 	}, nil
 }
 
@@ -319,7 +319,7 @@ func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, input
 	outputNames []string, outputShapes []shapes.Shape, modelProto *onnx.ModelProto) (compute.Executable, error) {
 
 	var migraphxOpts *native.MIGraphXOptions
-	if b.gpuEP == executionprovider.ExecutionProviderMIGraphX && b.migraphxCacheDir != "" {
+	if b.gpuEP == executionprovider.MIGraphX && b.migraphxCacheDir != "" {
 		migraphxOpts = &native.MIGraphXOptions{CacheDir: b.migraphxCacheDir}
 	}
 	session, err := native.CreateSession(modelBytes, inputNames, inputShapes, outputNames, b.gpuEP, b.logSeverity, migraphxOpts)
@@ -342,7 +342,7 @@ func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shap
 }
 
 func (b *Backend) HasSharedBuffers() bool {
-	return b.gpuEP != executionprovider.ExecutionProviderCUDA
+	return b.gpuEP != executionprovider.CUDA
 }
 
 func (b *Backend) NewSharedBuffer(deviceNum compute.DeviceNum, shape shapes.Shape) (compute.Buffer, any, error) {
