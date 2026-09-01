@@ -33,9 +33,8 @@ func MakeScalar(f *graph.Function, value any, dtype dtypes.DType) (compute.Value
 type Backend struct {
 	config             string
 	version            string
-	gpuEP              executionprovider.ExecutionProviderType // Native GPU execution provider: "cuda", "migraphx", or CPU only.
-	migraphxCacheDir   string                                  // Native MIGraphX compiled-program cache directory ("migraphx_cache_dir" config key); empty disables caching.
-	executionProvider  string                                  // Web execution provider (wasm/webgpu/webnn); empty on native builds.
+	executionProvider  executionprovider.Type // Execution provider: CPU, CUDA, MIGraphX, WASM, WebGPU, WebNN, WebGL.
+	migraphxCacheDir   string                 // Native MIGraphX compiled-program cache directory ("migraphx_cache_dir" config key); empty disables caching.
 	webVersion         string
 	logSeverity        int
 	enableGraphCapture bool
@@ -63,8 +62,8 @@ func (b *Backend) LogSeverity() int {
 	return b.logSeverity
 }
 
-// ExecutionProvider returns the execution provider configured for the backend (e.g. "webgpu", "wasm", "cuda", or "").
-func (b *Backend) ExecutionProvider() string {
+// ExecutionProvider returns the execution provider configured for the backend.
+func (b *Backend) ExecutionProvider() executionprovider.Type {
 	return b.executionProvider
 }
 
@@ -123,14 +122,13 @@ func (b *Backend) Description() string {
 	if b.version != "" {
 		verStr = fmt.Sprintf(" v%s", b.version)
 	}
-	if b.executionProvider != "" {
-		return fmt.Sprintf("ONNX Runtime Web%s (%s) compute backend for GoMLX", verStr, b.executionProvider)
-	}
-	switch b.gpuEP {
-	case executionprovider.ExecutionProviderCUDA:
+	switch b.executionProvider {
+	case executionprovider.CUDA:
 		return fmt.Sprintf("ONNX Runtime%s (CUDA GPU) compute backend for GoMLX", verStr)
-	case executionprovider.ExecutionProviderMIGraphX:
+	case executionprovider.MIGraphX:
 		return fmt.Sprintf("ONNX Runtime%s (MIGraphX GPU) compute backend for GoMLX", verStr)
+	case executionprovider.WASM, executionprovider.WebGPU, executionprovider.WebNN, executionprovider.WebGL:
+		return fmt.Sprintf("ONNX Runtime Web%s (%s) compute backend for GoMLX", verStr, b.executionProvider.String())
 	}
 	return fmt.Sprintf("ONNX Runtime%s (CPU) compute backend for GoMLX", verStr)
 }
@@ -140,14 +138,13 @@ func (b *Backend) NumDevices() int {
 }
 
 func (b *Backend) DeviceDescription(deviceNum compute.DeviceNum) string {
-	if b.executionProvider != "" {
-		return fmt.Sprintf("Web (%s) Default Device", b.executionProvider)
-	}
-	switch b.gpuEP {
-	case executionprovider.ExecutionProviderCUDA:
+	switch b.executionProvider {
+	case executionprovider.CUDA:
 		return "CUDA GPU (ONNX Runtime Default Device)"
-	case executionprovider.ExecutionProviderMIGraphX:
+	case executionprovider.MIGraphX:
 		return "MIGraphX GPU (ONNX Runtime Default Device)"
+	case executionprovider.WASM, executionprovider.WebGPU, executionprovider.WebNN, executionprovider.WebGL:
+		return fmt.Sprintf("Web (%s) Default Device", b.executionProvider.String())
 	}
 	return "CPU (ONNX Runtime Default Device)"
 }
@@ -160,7 +157,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		DynamicAxes:                 true,
 		DynamicShapes:               compute.DynamicShapesNative,
 	}
-	if b.gpuEP == executionprovider.ExecutionProviderMIGraphX {
+	if b.executionProvider == executionprovider.MIGraphX {
 		// The MIGraphX execution provider reliably supports only a subset of dtypes;
 		// others (e.g. float64, uint8) either fall back producing incorrect results
 		// or crash inside MIGraphX. Restrict the advertised capabilities accordingly,

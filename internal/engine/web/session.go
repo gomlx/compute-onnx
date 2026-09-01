@@ -9,18 +9,19 @@ import (
 	"syscall/js"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	"github.com/pkg/errors"
 )
 
 // Session wraps a JavaScript ort.InferenceSession.
 type Session struct {
 	jsSession js.Value
-	ep        string
+	ep        executionprovider.Type
 }
 
 // CreateSession creates an onnxruntime-web InferenceSession from model bytes.
-func CreateSession(modelBytes []byte, executionProvider string, logSeverity int, enableGraphCapture bool, webVersion string) (*Session, error) {
-	if err := EnsureORTLoaded(webVersion, executionProvider); err != nil {
+func CreateSession(modelBytes []byte, executionProvider executionprovider.Type, logSeverity int, enableGraphCapture bool, webVersion string) (*Session, error) {
+	if err := EnsureORTLoaded(webVersion, executionProvider.String()); err != nil {
 		return nil, errors.Wrap(err, "failed to initialize onnxruntime-web")
 	}
 
@@ -42,13 +43,13 @@ func CreateSession(modelBytes []byte, executionProvider string, logSeverity int,
 	// Create session options
 	options := global.Get("Object").New()
 	eps := global.Get("Array").New()
-	if executionProvider != "" {
-		eps.Call("push", executionProvider)
-	} else {
-		eps.Call("push", "wasm")
+	epStr := executionProvider.String()
+	if executionProvider == executionprovider.CPU || epStr == "" {
+		epStr = "wasm"
 	}
+	eps.Call("push", epStr)
 	options.Set("executionProviders", eps)
-	if enableGraphCapture && executionProvider == "webgpu" {
+	if enableGraphCapture && executionProvider == executionprovider.WebGPU {
 		options.Set("enableGraphCapture", true)
 	}
 

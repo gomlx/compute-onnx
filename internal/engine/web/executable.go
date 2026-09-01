@@ -8,6 +8,7 @@ import (
 	"syscall/js"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
@@ -50,7 +51,7 @@ func NewExecutable(backend compute.Backend, session *Session,
 	}
 
 	// If running under WebGPU, pre-allocate static input GPU buffers
-	if session != nil && session.ep == "webgpu" {
+	if session != nil && session.ep == executionprovider.WebGPU {
 		dev, errDev := GetWebGPUDevice()
 		if errDev == nil && !dev.IsUndefined() && !dev.IsNull() {
 			exec.isWebGPU = true

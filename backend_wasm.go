@@ -11,6 +11,7 @@ import (
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/engine/web"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
@@ -27,14 +28,14 @@ func IsSupportedPlatform() bool {
 	return true
 }
 
-func parseConfig(config string) (ep string, logSeverity int, enableGraphCapture bool, webVersion string, err error) {
+func parseConfig(config string) (ep executionprovider.Type, logSeverity int, enableGraphCapture bool, webVersion string, err error) {
 	config = strings.TrimSpace(config)
 	logSeverity = -1
 	if config == "" {
 		if web.HasWebGPU() {
-			return "webgpu", -1, false, "", nil
+			return executionprovider.WebGPU, -1, false, "", nil
 		}
-		return "wasm", -1, false, "", nil
+		return executionprovider.WASM, -1, false, "", nil
 	}
 	if strings.Contains(config, ":") || strings.EqualFold(config, "onnx") || strings.EqualFold(config, "onnxruntime") {
 		parsed, errEnv := ParseGOMLXBackendEnv(config)
@@ -43,6 +44,7 @@ func parseConfig(config string) (ep string, logSeverity int, enableGraphCapture 
 		}
 	}
 	parts := strings.Split(config, ",")
+	hasEP := false
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -55,42 +57,46 @@ func parseConfig(config string) (ep string, logSeverity int, enableGraphCapture 
 			if key == "log" {
 				var level int
 				if _, errScan := fmt.Sscanf(val, "%d", &level); errScan != nil {
-					return "", 0, false, "", errors.Errorf("invalid log level: %q", val)
+					return executionprovider.CPU, 0, false, "", errors.Errorf("invalid log level: %q", val)
 				}
 				logSeverity = max(3-level, 0)
 			} else if key == "graph_capture" || key == "graphcapture" || key == "enable_graph_capture" || key == "enablegraphcapture" {
 				var errBool error
 				enableGraphCapture, errBool = strconv.ParseBool(val)
 				if errBool != nil {
-					return "", 0, false, "", errors.Wrapf(errBool, "invalid boolean value for %q: %q", key, val)
+					return executionprovider.CPU, 0, false, "", errors.Wrapf(errBool, "invalid boolean value for %q: %q", key, val)
 				}
 			} else if key == "web_version" || key == "webversion" {
 				webVersion = val
 			} else {
-				return "", 0, false, "", errors.Errorf("unknown configuration option %q", key)
+				return executionprovider.CPU, 0, false, "", errors.Errorf("unknown configuration option %q", key)
 			}
 			continue
 		}
 		partLower := strings.ToLower(part)
 		if partLower == "webgpu" || partLower == "gpu" {
-			ep = "webgpu"
+			ep = executionprovider.WebGPU
+			hasEP = true
 		} else if partLower == "wasm" || partLower == "cpu" {
-			ep = "wasm"
+			ep = executionprovider.WASM
+			hasEP = true
 		} else if partLower == "webgl" {
-			ep = "webgl"
+			ep = executionprovider.WebGL
+			hasEP = true
 		} else if partLower == "webnn" {
-			ep = "webnn"
+			ep = executionprovider.WebNN
+			hasEP = true
 		} else if partLower == "graph_capture" || partLower == "graphcapture" {
 			enableGraphCapture = true
 		} else {
-			return "", 0, false, "", errors.Errorf("unknown web backend option: %q (expected \"webgpu\", \"wasm\", \"webgl\", \"webnn\", \"graph_capture\", or \"cpu\"/\"gpu\")", part)
+			return executionprovider.CPU, 0, false, "", errors.Errorf("unknown web backend option: %q (expected \"webgpu\", \"wasm\", \"webgl\", \"webnn\", \"graph_capture\", or \"cpu\"/\"gpu\")", part)
 		}
 	}
-	if ep == "" {
+	if !hasEP {
 		if web.HasWebGPU() {
-			ep = "webgpu"
+			ep = executionprovider.WebGPU
 		} else {
-			ep = "wasm"
+			ep = executionprovider.WASM
 		}
 	}
 	return ep, logSeverity, enableGraphCapture, webVersion, nil
@@ -103,23 +109,23 @@ func New(config string) (compute.Backend, error) {
 		return nil, err
 	}
 
-	if ep == "webgpu" && !web.HasWebGPU() {
+	if ep == executionprovider.WebGPU && !web.HasWebGPU() {
 		return nil, errors.New("WebGPU is not available or failed to acquire a GPU adapter in the current browser environment (navigator.gpu is unavailable or requestAdapter() failed; in Chrome, this may require running with GPU hardware acceleration or enabling --enable-unsafe-webgpu)")
 	}
 
-	if ep == "webnn" && !web.HasWebNN() {
+	if ep == executionprovider.WebNN && !web.HasWebNN() {
 		return nil, errors.New("WebNN is not available in the current browser environment (navigator.ml is undefined); WebNN is experimental in most browsers and typically requires enabling a browser flag such as chrome://flags/#web-machine-learning-neural-network)")
 	}
 
-	if err := web.EnsureORTLoaded(webVersion, ep); err != nil {
+	if err := web.EnsureORTLoaded(webVersion, ep.String()); err != nil {
 		return nil, errors.Wrap(err, "failed to initialize onnxruntime-web")
 	}
 
 	hasFloat16 := false
 	hasFloat64 := true
-	if ep == "webgpu" {
+	if ep == executionprovider.WebGPU {
 		hasFloat16 = web.HasWebGPUFloat16()
-	} else if ep == "wasm" || ep == "" {
+	} else if ep == executionprovider.WASM || ep == executionprovider.CPU {
 		hasFloat16 = true // ORT Web WebAssembly CPU runtime supports float16 models
 	}
 

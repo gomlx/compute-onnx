@@ -13,6 +13,7 @@ import (
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/engine/web"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	"k8s.io/klog/v2"
 )
 
@@ -90,24 +91,24 @@ func TestWebNNPresenceCheck(t *testing.T) {
 
 func TestParseConfigGraphCapture(t *testing.T) {
 	tests := []struct {
-		config             string
-		wantEP             string
-		wantGraphCapture   bool
-		wantWebVersion     string
-		wantErr            bool
+		config           string
+		wantEP           executionprovider.Type
+		wantGraphCapture bool
+		wantWebVersion   string
+		wantErr          bool
 	}{
-		{config: "", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: ""},
-		{config: "wasm", wantEP: "wasm", wantGraphCapture: false, wantWebVersion: ""},
-		{config: "webgpu", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: ""},
-		{config: "webgpu,graph_capture=true", wantEP: "webgpu", wantGraphCapture: true, wantWebVersion: ""},
-		{config: "webgpu,graph_capture=1", wantEP: "webgpu", wantGraphCapture: true, wantWebVersion: ""},
-		{config: "webgpu,graph_capture=false", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: ""},
-		{config: "webgpu,graph_capture=0", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: ""},
-		{config: "webgpu,graph_capture", wantEP: "webgpu", wantGraphCapture: true, wantWebVersion: ""},
-		{config: "onnx:webgpu,graph_capture=true,log=2", wantEP: "webgpu", wantGraphCapture: true, wantWebVersion: ""},
-		{config: "wasm,web_version=1.27", wantEP: "wasm", wantGraphCapture: false, wantWebVersion: "1.27"},
-		{config: "webgpu,web_version=@latest", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: "@latest"},
-		{config: "webgpu,webversion=v1.27", wantEP: "webgpu", wantGraphCapture: false, wantWebVersion: "v1.27"},
+		{config: "", wantEP: executionprovider.WebGPU, wantGraphCapture: false, wantWebVersion: ""},
+		{config: "wasm", wantEP: executionprovider.WASM, wantGraphCapture: false, wantWebVersion: ""},
+		{config: "webgpu", wantEP: executionprovider.WebGPU, wantGraphCapture: false, wantWebVersion: ""},
+		{config: "webgpu,graph_capture=true", wantEP: executionprovider.WebGPU, wantGraphCapture: true, wantWebVersion: ""},
+		{config: "webgpu,graph_capture=1", wantEP: executionprovider.WebGPU, wantGraphCapture: true, wantWebVersion: ""},
+		{config: "webgpu,graph_capture=false", wantEP: executionprovider.WebGPU, wantGraphCapture: false, wantWebVersion: ""},
+		{config: "webgpu,graph_capture=0", wantEP: executionprovider.WebGPU, wantGraphCapture: false, wantWebVersion: ""},
+		{config: "webgpu,graph_capture", wantEP: executionprovider.WebGPU, wantGraphCapture: true, wantWebVersion: ""},
+		{config: "onnx:webgpu,graph_capture=true,log=2", wantEP: executionprovider.WebGPU, wantGraphCapture: true, wantWebVersion: ""},
+		{config: "wasm,web_version=1.27", wantEP: executionprovider.WASM, wantGraphCapture: false, wantWebVersion: "1.27"},
+		{config: "webgpu,web_version=@latest", wantEP: executionprovider.WebGPU, wantGraphCapture: false, wantWebVersion: "@latest"},
+		{config: "webgpu,webversion=v1.27", wantEP: executionprovider.WebGPU, wantGraphCapture: false, wantWebVersion: "v1.27"},
 		{config: "webgpu,graph_capture=invalid_bool", wantErr: true},
 	}
 
@@ -118,7 +119,7 @@ func TestParseConfigGraphCapture(t *testing.T) {
 				t.Fatalf("parseConfig(%q) error = %v, wantErr %v", tt.config, err, tt.wantErr)
 			}
 			if !tt.wantErr {
-				if ep != tt.wantEP && !(tt.config == "" && !web.HasWebGPU() && ep == "wasm") {
+				if ep != tt.wantEP && !(tt.config == "" && !web.HasWebGPU() && ep == executionprovider.WASM) {
 					t.Errorf("ep = %v, want %v", ep, tt.wantEP)
 				}
 				if gc != tt.wantGraphCapture {

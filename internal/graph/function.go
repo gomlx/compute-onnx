@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
 	"github.com/gomlx/compute/dtypes/float16"
@@ -18,28 +19,34 @@ import (
 
 type Function struct {
 	notimplemented.Function
-	name       string
-	builder    *Builder
-	parent     *Function
-	params     []*Node
-	nodes      []*Node
-	returns    []*Node
-	nodeCount  int
-	constCache map[string]*Node
+	name              string
+	builder           *Builder
+	parent            *Function
+	executionProvider executionprovider.Type
+	params            []*Node
+	nodes             []*Node
+	returns           []*Node
+	nodeCount         int
+	constCache        map[string]*Node
 }
 
 var _ compute.Function = (*Function)(nil)
 
 func NewFunction(name string, builder *Builder) *Function {
+	var ep executionprovider.Type
+	if builder != nil {
+		ep = builder.executionProvider
+	}
 	return &Function{
 		Function: notimplemented.Function{
 			ErrFn: func(op compute.OpType) error {
 				return errors.Wrapf(compute.ErrNotImplemented, "%s (%d) not implemented for ONNX Runtime backend", op, op)
 			},
 		},
-		name:       name,
-		builder:    builder,
-		constCache: make(map[string]*Node),
+		name:              name,
+		builder:           builder,
+		executionProvider: ep,
+		constCache:        make(map[string]*Node),
 	}
 }
 
@@ -213,8 +220,14 @@ func (f *Function) Builder() compute.Builder {
 	return f.builder
 }
 
-func (f *Function) isWebGPU() bool {
-	return f.builder != nil && f.builder.IsWebGPU()
+// ExecutionProvider returns the execution provider configured for the function.
+func (f *Function) ExecutionProvider() executionprovider.Type {
+	return f.executionProvider
+}
+
+// SetExecutionProvider sets the execution provider configured for the function.
+func (f *Function) SetExecutionProvider(ep executionprovider.Type) {
+	f.executionProvider = ep
 }
 
 func (f *Function) LogSeverity() int {

@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapeinference"
@@ -245,7 +246,7 @@ func (f *Function) ArgMinMax(x compute.Value, axis int, outputDType dtypes.DType
 
 	effInput := xNode
 	effAxis := axis
-	needsReshape := f.isWebGPU() && xNode.shape.Rank() == 1
+	needsReshape := f.executionProvider == executionprovider.WebGPU && xNode.shape.Rank() == 1
 	var int64Shape shapes.Shape
 	if needsReshape {
 		// Reshape 1D [N] to 2D [1, N] to avoid WebGPU WGSL bug where rank-1 indices are scalar u32 and cannot be indexed.

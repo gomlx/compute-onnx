@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
@@ -490,32 +491,35 @@ func (g *GpuTensorWrapper) GetData() any {
 
 // Buffer implements compute.Buffer for ONNX Runtime native execution.
 type Buffer struct {
-	backend    compute.Backend
-	wrapper    OrtTensorWrapper
-	shape      shapes.Shape
-	device     compute.DeviceNum
-	isShared   bool
-	isCUDA     bool
-	executable *Executable
+	backend           compute.Backend
+	wrapper           OrtTensorWrapper
+	shape             shapes.Shape
+	device            compute.DeviceNum
+	executionProvider executionprovider.Type
+	executable        *Executable
 }
 
 var _ compute.Buffer = (*Buffer)(nil)
 
 // NewBuffer creates a new Buffer.
-func NewBuffer(backend compute.Backend, wrapper OrtTensorWrapper, shape shapes.Shape, device compute.DeviceNum, isShared, isCUDA bool, exec *Executable) *Buffer {
+func NewBuffer(backend compute.Backend, wrapper OrtTensorWrapper, shape shapes.Shape, device compute.DeviceNum, executionProvider executionprovider.Type, exec *Executable) *Buffer {
 	return &Buffer{
-		backend:    backend,
-		wrapper:    wrapper,
-		shape:      shape,
-		device:     device,
-		isShared:   isShared,
-		isCUDA:     isCUDA,
-		executable: exec,
+		backend:           backend,
+		wrapper:           wrapper,
+		shape:             shape,
+		device:            device,
+		executionProvider: executionProvider,
+		executable:        exec,
 	}
 }
 
 func (b *Buffer) Backend() compute.Backend {
 	return b.backend
+}
+
+// IsShared returns whether the buffer supports direct host memory access.
+func (b *Buffer) IsShared() bool {
+	return b.executionProvider != executionprovider.CUDA
 }
 
 func (b *Buffer) Finalize() error {
@@ -549,11 +553,8 @@ func (b *Buffer) ToFlatData(flat any) error {
 }
 
 func (b *Buffer) Data() (flat any, err error) {
-	if b.isCUDA {
+	if !b.IsShared() {
 		return nil, errors.New("direct data access not supported for GPU buffers; use ToFlatData")
-	}
-	if !b.isShared {
-		return nil, errors.New("shared buffers not supported")
 	}
 	if b.wrapper == nil {
 		return nil, errors.New("cannot read from finalized buffer")
@@ -581,11 +582,11 @@ func (b *Buffer) CopyToDevice(deviceNum compute.DeviceNum) (compute.Buffer, erro
 		return nil, err
 	}
 	return &Buffer{
-		backend:  b.backend,
-		wrapper:  newWrapper,
-		shape:    b.shape,
-		device:   deviceNum,
-		isShared: true,
+		backend:           b.backend,
+		wrapper:           newWrapper,
+		shape:             b.shape,
+		device:            deviceNum,
+		executionProvider: b.executionProvider,
 	}, nil
 }
 

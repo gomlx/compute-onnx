@@ -4,6 +4,7 @@ package graph
 
 import (
 	"github.com/gomlx/compute"
+	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	"github.com/gomlx/compute/notimplemented"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
@@ -16,7 +17,7 @@ type CompilerFn func(b *Builder) (compute.Executable, error)
 type Builder struct {
 	notimplemented.Builder
 	name              string
-	executionProvider string
+	executionProvider executionprovider.Type
 	logSeverity       int
 	compileFn         CompilerFn
 	mainFn            *Function
@@ -56,19 +57,17 @@ func (b *Builder) MainFunction() *Function {
 	return b.mainFn
 }
 
-// SetExecutionProvider sets the target execution provider (e.g. "webgpu", "wasm", "cuda").
-func (b *Builder) SetExecutionProvider(ep string) {
+// SetExecutionProvider sets the target execution provider.
+func (b *Builder) SetExecutionProvider(ep executionprovider.Type) {
 	b.executionProvider = ep
+	for _, f := range b.funcs {
+		f.executionProvider = ep
+	}
 }
 
 // ExecutionProvider returns the target execution provider.
-func (b *Builder) ExecutionProvider() string {
+func (b *Builder) ExecutionProvider() executionprovider.Type {
 	return b.executionProvider
-}
-
-// IsWebGPU returns true if targeting the WebGPU execution provider.
-func (b *Builder) IsWebGPU() bool {
-	return b.executionProvider == "webgpu"
 }
 
 // SetLogSeverity sets the log severity level for the builder.
