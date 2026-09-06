@@ -16,7 +16,7 @@ import (
 // To run:
 //
 //	$ go test -bench=. -benchmem
-func BenchmarkONNXBackend(b *testing.B) {
+func BenchmarkCompliance(b *testing.B) {
 	fmt.Printf("Running benchmarks on backend: %s, %s\n", backend.Name(), backend.Description())
 	backendtest.RunAllBenchmarks(b, backend)
 }
