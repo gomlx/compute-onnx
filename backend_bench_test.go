@@ -9,7 +9,17 @@ import (
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
+	"github.com/gomlx/compute/support/backendtest"
 )
+
+// BenchmarkONNXBackend runs all compliance (backendtest) compute.Backend benchmarks on the given backend.
+// To run:
+//
+//	$ go test -bench=. -benchmem
+func BenchmarkONNXBackend(b *testing.B) {
+	fmt.Printf("Running benchmarks on backend: %s, %s\n", backend.Name(), backend.Description())
+	backendtest.RunAllBenchmarks(b, backend)
+}
 
 func BenchmarkTransfer(b *testing.B) {
 	sizes := []int{10, 1000, 1_000_000}
