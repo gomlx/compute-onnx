@@ -10,13 +10,14 @@ import (
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
 	"github.com/gomlx/compute/dtypes/float16"
+	"github.com/gomlx/compute/shapeinference"
 	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
 
 func init() {
 	registerOp(compute.OpTypeFusedSoftmax)
-	registerOp(compute.OpTypeFusedGelu)
+	registerOp(compute.OpTypeFusedActivation)
 	registerOp(compute.OpTypeFusedLayerNorm)
 	registerOp(compute.OpTypeFusedDense)
 	registerOp(compute.OpTypeFusedScaledDotProductAttention)
@@ -178,37 +179,184 @@ func (f *Function) FusedSoftmax(x compute.Value, axis int) (compute.Value, error
 	return f.addNode(node), nil
 }
 
-// FusedGelu computes Gaussian Error Linear Unit activation using ONNX Gelu (opset 20+) or FastGelu (com.microsoft).
-func (f *Function) FusedGelu(x compute.Value, exact bool) (compute.Value, error) {
+// FusedActivation applies the configured activation function using standard ONNX operators.
+func (f *Function) FusedActivation(x compute.Value, cfg compute.ActivationConfig) (compute.Value, error) {
 	xNode, ok := x.(*Node)
 	if !ok {
-		return nil, errors.New("FusedGelu: input must be a valid onnxruntime node")
+		return nil, errors.New("FusedActivation: input must be a valid onnxruntime node")
 	}
 
-	if !exact {
+	outShape, err := shapeinference.FusedActivation(xNode.shape, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	switch cfg.Type {
+	case compute.ActivationNone:
+		return f.Identity(xNode)
+
+	case compute.ActivationRelu:
 		node := &Node{
-			domain: "com.microsoft",
-			opType: "FastGelu",
+			opType: "Relu",
 			inputs: []*Node{xNode},
-			shape:  xNode.shape,
+			shape:  outShape,
 		}
 		return f.addNode(node), nil
-	}
 
-	node := &Node{
-		opType: "Gelu",
-		inputs: []*Node{xNode},
-		shape:  xNode.shape,
-		attributes: []*onnx.AttributeProto{
-			{
-				Name: "approximate",
-				Type: onnx.AttributeProto_STRING,
-				S:    []byte("none"),
+	case compute.ActivationSigmoid:
+		node := &Node{
+			opType: "Sigmoid",
+			inputs: []*Node{xNode},
+			shape:  outShape,
+		}
+		return f.addNode(node), nil
+
+	case compute.ActivationHardSigmoid:
+		node := &Node{
+			opType: "HardSigmoid",
+			inputs: []*Node{xNode},
+			shape:  outShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "alpha",
+					Type: onnx.AttributeProto_FLOAT,
+					F:    0.2,
+				},
+				{
+					Name: "beta",
+					Type: onnx.AttributeProto_FLOAT,
+					F:    0.5,
+				},
 			},
-		},
+		}
+		return f.addNode(node), nil
+
+	case compute.ActivationLeakyRelu:
+		node := &Node{
+			opType: "LeakyRelu",
+			inputs: []*Node{xNode},
+			shape:  outShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "alpha",
+					Type: onnx.AttributeProto_FLOAT,
+					F:    0.3,
+				},
+			},
+		}
+		return f.addNode(node), nil
+
+	case compute.ActivationSelu:
+		node := &Node{
+			opType: "Selu",
+			inputs: []*Node{xNode},
+			shape:  outShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "alpha",
+					Type: onnx.AttributeProto_FLOAT,
+					F:    1.6732632,
+				},
+				{
+					Name: "gamma",
+					Type: onnx.AttributeProto_FLOAT,
+					F:    1.050701,
+				},
+			},
+		}
+		return f.addNode(node), nil
+
+	case compute.ActivationSilu:
+		sig, err := f.Logistic(xNode)
+		if err != nil {
+			return nil, err
+		}
+		return f.Mul(xNode, sig)
+
+	case compute.ActivationHardSwish:
+		node := &Node{
+			opType: "HardSwish",
+			inputs: []*Node{xNode},
+			shape:  outShape,
+		}
+		return f.addNode(node), nil
+
+	case compute.ActivationTanh:
+		return f.Tanh(xNode)
+
+	case compute.ActivationGelu:
+		node := &Node{
+			opType: "Gelu",
+			inputs: []*Node{xNode},
+			shape:  outShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "approximate",
+					Type: onnx.AttributeProto_STRING,
+					S:    []byte("none"),
+				},
+			},
+		}
+		return f.addNode(node), nil
+
+	case compute.ActivationGeluApproximate:
+		node := &Node{
+			opType: "Gelu",
+			inputs: []*Node{xNode},
+			shape:  outShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "approximate",
+					Type: onnx.AttributeProto_STRING,
+					S:    []byte("tanh"),
+				},
+			},
+		}
+		return f.addNode(node), nil
+
+	case compute.ActivationSwiGLU:
+		rank := xNode.shape.Rank()
+		lastDim := xNode.shape.Dimensions[rank-1]
+		hiddenDim := lastDim / 2
+
+		startsGate := make([]int, rank)
+		limitsGate := make([]int, rank)
+		strides := make([]int, rank)
+		startsVal := make([]int, rank)
+		limitsVal := make([]int, rank)
+
+		for i := 0; i < rank-1; i++ {
+			limitsGate[i] = xNode.shape.Dimensions[i]
+			limitsVal[i] = xNode.shape.Dimensions[i]
+			strides[i] = 1
+		}
+		limitsGate[rank-1] = hiddenDim
+		strides[rank-1] = 1
+
+		startsVal[rank-1] = hiddenDim
+		limitsVal[rank-1] = lastDim
+
+		xGate, err := f.Slice(xNode, startsGate, limitsGate, strides)
+		if err != nil {
+			return nil, errors.Wrap(err, "FusedActivation(SwiGLU): slicing gate failed")
+		}
+		xValue, err := f.Slice(xNode, startsVal, limitsVal, strides)
+		if err != nil {
+			return nil, errors.Wrap(err, "FusedActivation(SwiGLU): slicing value failed")
+		}
+
+		gateAct, err := f.FusedActivation(xGate, compute.ActivationConfig{Type: compute.ActivationSilu})
+		if err != nil {
+			return nil, errors.Wrap(err, "FusedActivation(SwiGLU): silu activation on gate failed")
+		}
+
+		return f.Mul(gateAct, xValue)
+
+	default:
+		return nil, errors.Errorf("FusedActivation: unsupported activation %v", cfg.Type)
 	}
-	return f.addNode(node), nil
 }
+
 
 // FusedLayerNorm applies layer normalization over specified axes using ONNX LayerNormalization (opset 17+).
 func (f *Function) FusedLayerNorm(x compute.Value, axes []int, epsilon float64, gamma, beta compute.Value) (compute.Value, error) {
@@ -324,11 +472,24 @@ func (f *Function) FusedDense(x, weight, bias compute.Value, options compute.Den
 		return nil, errors.New("FusedDense: inputs must be valid onnxruntime nodes")
 	}
 
+	var biasNode *Node
+	var biasShape shapes.Shape
+	if bias != nil {
+		var ok bool
+		biasNode, ok = bias.(*Node)
+		if !ok {
+			return nil, errors.New("FusedDense: bias must be a valid onnxruntime node")
+		}
+		biasShape = biasNode.shape
+	}
+
+	_, err := shapeinference.FusedDense(xNode.shape, wNode.shape, biasShape, options)
+	if err != nil {
+		return nil, err
+	}
+
 	xRank := xNode.shape.Rank()
 	wRank := wNode.shape.Rank()
-	if xRank < 1 || wRank < 1 {
-		return nil, errors.Errorf("FusedDense: x rank (%d) and weight rank (%d) must be at least 1", xRank, wRank)
-	}
 
 	var lhsContractingAxes []int
 	var rhsContractingAxes []int
@@ -349,11 +510,7 @@ func (f *Function) FusedDense(x, weight, bias compute.Value, options compute.Den
 
 	// Add bias if provided
 	outVal := dotRes
-	if bias != nil {
-		biasNode, ok := bias.(*Node)
-		if !ok {
-			return nil, errors.New("FusedDense: bias must be a valid onnxruntime node")
-		}
+	if biasNode != nil {
 		dotNode := dotRes.(*Node)
 		biasReshaped, err := broadcastToShape(f, biasNode, dotNode)
 		if err != nil {
@@ -366,44 +523,10 @@ func (f *Function) FusedDense(x, weight, bias compute.Value, options compute.Den
 	}
 
 	// Apply activation
-	switch options.Activation {
-	case compute.ActivationNone:
+	if options.Activation.Type == compute.ActivationNone {
 		return outVal, nil
-	case compute.ActivationRelu:
-		outNode, ok := outVal.(*Node)
-		if !ok {
-			return nil, errors.New("FusedDense: outVal is not a valid onnxruntime node")
-		}
-		node := &Node{
-			opType: "Relu",
-			inputs: []*Node{outNode},
-			shape:  outNode.shape,
-		}
-		return f.addNode(node), nil
-	case compute.ActivationGelu:
-		return f.FusedGelu(outVal, true)
-	case compute.ActivationSilu:
-		sig, err := f.Logistic(outVal)
-		if err != nil {
-			return nil, err
-		}
-		return f.Mul(outVal, sig)
-	case compute.ActivationHardSwish:
-		outNode, ok := outVal.(*Node)
-		if !ok {
-			return nil, errors.New("FusedDense: outVal is not a valid onnxruntime node")
-		}
-		node := &Node{
-			opType: "HardSwish",
-			inputs: []*Node{outNode},
-			shape:  outNode.shape,
-		}
-		return f.addNode(node), nil
-	case compute.ActivationTanh:
-		return f.Tanh(outVal)
-	default:
-		return nil, errors.Errorf("FusedDense: unsupported activation type %v", options.Activation)
 	}
+	return f.FusedActivation(outVal, options.Activation)
 }
 
 // FusedScaledDotProductAttention computes multi-head scaled dot-product attention.
@@ -862,7 +985,7 @@ func (f *Function) FusedQuantizedDense(x, weights, bias compute.Value, weightsQu
 	}
 
 	return f.FusedDense(xNode, wFloat, bias, compute.DenseConfig{
-		Activation:   activation,
+		Activation:   compute.ActivationConfig{Type: activation},
 		WeightLayout: compute.DenseLayoutInputOutputs,
 	})
 }
