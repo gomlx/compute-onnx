@@ -26,7 +26,7 @@ func TestFusedDenseActivationsAndLayouts(t *testing.T) {
 	t.Run("DenseLayoutOutputsInput", func(t *testing.T) {
 		got, err := testutil.Exec1(b, []any{x, w, bias}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
 			return f.FusedDense(params[0], params[1], params[2], compute.DenseConfig{
-				Activation:   compute.ActivationNone,
+				Activation:   compute.ActivationConfig{Type: compute.ActivationNone},
 				WeightLayout: compute.DenseLayoutOutputsInput,
 			})
 		})
@@ -45,7 +45,7 @@ func TestFusedDenseActivationsAndLayouts(t *testing.T) {
 		wVal := [][]float32{{1.0}, {1.0}, {1.0}}
 		got, err := testutil.Exec1(b, []any{xVal, wVal}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
 			return f.FusedDense(params[0], params[1], nil, compute.DenseConfig{
-				Activation:   compute.ActivationSilu,
+				Activation:   compute.ActivationConfig{Type: compute.ActivationSilu},
 				WeightLayout: compute.DenseLayoutInputOutputs,
 			})
 		})
@@ -64,7 +64,7 @@ func TestFusedDenseActivationsAndLayouts(t *testing.T) {
 		wVal := [][]float32{{1.0}}
 		got, err := testutil.Exec1(b, []any{xVal, wVal}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
 			return f.FusedDense(params[0], params[1], nil, compute.DenseConfig{
-				Activation:   compute.ActivationTanh,
+				Activation:   compute.ActivationConfig{Type: compute.ActivationTanh},
 				WeightLayout: compute.DenseLayoutInputOutputs,
 			})
 		})
@@ -74,6 +74,83 @@ func TestFusedDenseActivationsAndLayouts(t *testing.T) {
 		want := []float32{0.0}
 		if ok, diff := testutil.IsInDelta(want, got, 1e-4); !ok {
 			t.Errorf("Mismatch:\n%s", diff)
+		}
+	})
+
+	t.Run("ActivationSwiGLU_Rejected", func(t *testing.T) {
+		xVal := [][]float32{{1, 2}}
+		wVal := [][]float32{{1, 2}, {3, 4}}
+		_, err := testutil.Exec1(b, []any{xVal, wVal}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+			return f.FusedDense(params[0], params[1], nil, compute.DenseConfig{
+				Activation:   compute.ActivationConfig{Type: compute.ActivationSwiGLU},
+				WeightLayout: compute.DenseLayoutInputOutputs,
+			})
+		})
+		if err == nil {
+			t.Errorf("FusedDense should reject SwiGLU")
+		}
+	})
+}
+
+func TestFusedActivation(t *testing.T) {
+	b, err := New("")
+	if err != nil {
+		t.Fatalf("Failed to create backend: %+v", err)
+	}
+	defer b.Finalize()
+
+	input := []float32{0, -1, 2, -3, 4, -5, 6}
+
+	tests := []struct {
+		name      string
+		actType   compute.ActivationType
+		want      []float32
+		tolerance float64
+	}{
+		{"None", compute.ActivationNone, []float32{0, -1, 2, -3, 4, -5, 6}, 1e-6},
+		{"Relu", compute.ActivationRelu, []float32{0, 0, 2, 0, 4, 0, 6}, 1e-6},
+		{"Sigmoid", compute.ActivationSigmoid, []float32{0.5, 0.26894143, 0.8807971, 0.047425873, 0.98201376, 0.006692851, 0.9975274}, 1e-5},
+		{"HardSigmoid", compute.ActivationHardSigmoid, []float32{0.5, 0.3, 0.9, 0.0, 1.0, 0.0, 1.0}, 1e-6},
+		{"LeakyRelu", compute.ActivationLeakyRelu, []float32{0, -0.3, 2, -0.9, 4, -1.5, 6}, 1e-6},
+		{"Selu", compute.ActivationSelu, []float32{0.0, -1.1113307, 2.101402, -1.6705687, 4.202804, -1.7462534, 6.304206}, 1e-5},
+		{"Silu", compute.ActivationSilu, []float32{0, -0.26894143, 1.7615942, -0.14227763, 3.928055, -0.03346425, 5.9851646}, 1e-5},
+		{"HardSwish", compute.ActivationHardSwish, []float32{0, -0.33333334, 1.6666666, 0, 4, 0, 6}, 1e-6},
+		{"Tanh", compute.ActivationTanh, []float32{0, -0.76159416, 0.9640276, -0.99505475, 0.9993293, -0.9999092, 0.9999877}, 1e-5},
+		{"GeluExact", compute.ActivationGelu, []float32{0, -0.15865526, 1.9544997, -4.0496886e-03, 3.9998736, -1.3411045e-06, 6}, 1e-5},
+		{"GeluApproximate", compute.ActivationGeluApproximate, []float32{0, -0.15880796, 1.9545977, -3.6375225e-03, 3.9999294, 0, 6}, 0.01},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := testutil.Exec1(b, []any{input}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+				return f.FusedActivation(params[0], compute.ActivationConfig{Type: tc.actType})
+			})
+			if err != nil {
+				t.Fatalf("FusedActivation(%s) failed: %+v", tc.name, err)
+			}
+			if ok, diff := testutil.IsInDelta(tc.want, got, tc.tolerance); !ok {
+				t.Errorf("FusedActivation(%s) result mismatch:\n%s", tc.name, diff)
+			}
+		})
+	}
+
+	t.Run("SwiGLU", func(t *testing.T) {
+		swigluIn := [][]float32{
+			{0, 1, 2, 3},
+			{-1, -2, 4, 5},
+		}
+		got, err := testutil.Exec1(b, []any{swigluIn}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+			return f.FusedActivation(params[0], compute.ActivationConfig{Type: compute.ActivationSwiGLU})
+		})
+		if err != nil {
+			t.Fatalf("FusedActivation(SwiGLU) failed: %+v", err)
+		}
+		want := [][]float32{
+			{0, 2.1931758},
+			{-1.0757657, -1.1920292},
+		}
+		if ok, diff := testutil.IsInDelta(want, got, 1e-5); !ok {
+			t.Errorf("SwiGLU result mismatch:\n%s", diff)
 		}
 	})
 }

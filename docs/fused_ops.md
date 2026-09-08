@@ -13,9 +13,11 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
 | `compute.Backend` Fused Op | ONNX Operator / Graph Mapping | Support Status in `compute-onnx` |
 | :--- | :--- | :--- |
 | `FusedSoftmax` | Standard ONNX `Softmax` (opset 13+) | **Supported** |
-| `FusedGelu` | Standard ONNX `Gelu` (opset 20+) | **Supported** |
+| `FusedActivation` | Standard ONNX operators (`Relu`, `Sigmoid`, `HardSigmoid`, `LeakyRelu`, `Selu`, `Silu`, `HardSwish`, `Tanh`, `Gelu`, `SwiGLU`) | **Supported** |
+| `FusedActivationVJP` | Backward gradient graph | **Not Implemented** (Falls back to decomposed VJP) |
 | `FusedLayerNorm` | Standard ONNX `LayerNormalization` (opset 17+) | **Supported** (with trailing contiguous axes restriction) |
-| `FusedDense` | ONNX `MatMul` / `Einsum` + `Add` + Activation (`Relu`, `Gelu`, `Sigmoid`/`Mul`, `HardSwish`, `Tanh`) | **Supported** |
+| `FusedDense` | ONNX `MatMul` / `Einsum` + `Add` + `FusedActivation` | **Supported** (Supports all activations except `ActivationSwiGLU`) |
+| `FusedDenseVJP` | Backward gradient graph | **Not Implemented** (Falls back to decomposed VJP) |
 | `FusedScaledDotProductAttention` | ONNX Graph / `Softmax( (Q @ K^T) * scale + mask + bias ) @ V` (Fused by ORT Session Optimizer) | **Supported** (Forward Pass with Causal, Masks, Biases, GQA, SeqLen) |
 | `FusedScaledDotProductAttentionVJP` | Direct backward gradient graph | **Not Implemented** (Falls back to decomposed VJP) |
 | `FusedAttentionQKVProjection` | ONNX `MatMul` + `Slice` (Q, K, V) + `Add` (bias) | **Supported** (for 2D, 3D, 4D input ranks) |
@@ -35,12 +37,24 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
 
 ---
 
-### 2.2 `FusedGelu`
-- **GoMLX Interface**: `FusedGelu(x Value, exact bool) (Value, error)`
-- **ONNX Operator**: Standard ONNX `Gelu` (opset 20+)
-- **Attributes**: `approximate` string (`"none"` for exact GELU using `erf`, `"tanh"` for tanh approximation).
+### 2.2 `FusedActivation`
+- **GoMLX Interface**: `FusedActivation(x Value, cfg ActivationConfig) (Value, error)`
+- **ONNX Operator Mapping**:
+  - `ActivationNone`: ONNX `Identity`
+  - `ActivationRelu`: Standard ONNX `Relu`
+  - `ActivationSigmoid`: Standard ONNX `Sigmoid`
+  - `ActivationHardSigmoid`: Standard ONNX `HardSigmoid` (`alpha=0.2`, `beta=0.5`)
+  - `ActivationLeakyRelu`: Standard ONNX `LeakyRelu` (`alpha=0.3`)
+  - `ActivationSelu`: Standard ONNX `Selu` (`alpha=1.6732632`, `gamma=1.050701`)
+  - `ActivationSilu`: Composed ONNX graph: `x * Sigmoid(x)`
+  - `ActivationHardSwish`: Standard ONNX `HardSwish`
+  - `ActivationTanh`: Standard ONNX `Tanh`
+  - `ActivationGelu`: Standard ONNX `Gelu` (opset 20+) with `approximate="none"`
+  - `ActivationGeluApproximate`: Standard ONNX `Gelu` (opset 20+) with `approximate="tanh"`
+  - `ActivationSwiGLU`: ONNX `Slice` to split the last dimension into gate and value components, followed by `Silu(gate) * value`.
 - **Shortcomings & Limitations**:
-  - Requires floating-point dtypes (`Float32`, `Float64`, `Float16`, `BFloat16`).
+  - `ActivationSwiGLU` requires a static, even last dimension size and rank $\ge 1$.
+  - `FusedActivationVJP` is not implemented (returns `ErrNotImplemented`), so GoMLX automatically decomposes the activation when calculating gradients during training.
 
 ---
 
@@ -57,10 +71,11 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
 
 ### 2.4 `FusedDense`
 - **GoMLX Interface**: `FusedDense(x, weight, bias Value, options DenseConfig) (Value, error)`
-- **ONNX Operator Mapping**: Expressed via ONNX `DotGeneral` (`MatMul`/`Einsum`), optional ONNX `Add` for bias, and activation operator (`Relu`, `Gelu`, `Mul(x, Sigmoid(x))` for `Silu`, `HardSwish`, `Tanh`).
+- **ONNX Operator Mapping**: Expressed via ONNX `DotGeneral` (`MatMul`/`Einsum`), optional ONNX `Add` for bias, and `FusedActivation(outVal, options.Activation)`.
 - **ONNX Runtime Fusion**: ONNX Runtime's internal session graph optimizer (`GemmFusion`, `MatMulAddFusion`, `ActivationFusion`) automatically merges these sequential ONNX nodes into optimized fused execution kernels at runtime.
-- **Supported Activations**: `ActivationNone`, `ActivationRelu`, `ActivationGelu`, `ActivationSilu`, `ActivationHardSwish`, `ActivationTanh`.
+- **Supported Activations**: All activations from `ActivationConfig` except `ActivationSwiGLU` (which changes output dimensions and must be applied separately via `FusedActivation`).
 - **Supported Weight Layouts**: `DenseLayoutInputOutputs` (`[in_features, out_features...]`) and `DenseLayoutOutputsInput` (`[out_features..., in_features]`).
+- **VJP Support**: `FusedDenseVJP` returns `ErrNotImplemented`; GoMLX automatically differentiates via decomposition.
 
 ---
 
