@@ -3,7 +3,7 @@ module github.com/gomlx/compute-onnx
 go 1.27
 
 require (
-	github.com/gomlx/compute v0.1.9-0.20260908145542-c7f199af496a
+	github.com/gomlx/compute v0.1.9
 	github.com/pkg/errors v0.9.1
 	google.golang.org/protobuf v1.36.11
 	k8s.io/klog/v2 v2.140.0
