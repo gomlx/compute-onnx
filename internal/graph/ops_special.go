@@ -22,6 +22,10 @@ func (f *Function) ConvertDType(operand compute.Value, targetDType dtypes.DType)
 		return nil, errors.New("input must be a valid onnxruntime node")
 	}
 
+	if xNode.shape.DType == targetDType {
+		return xNode, nil
+	}
+
 	outShape := xNode.shape
 	outShape.DType = targetDType
 
@@ -70,6 +74,10 @@ func (f *Function) Reshape(x compute.Value, newDimensions ...int) (compute.Value
 	outShape, err := shapeinference.Reshape(xNode.shape, newDimensions)
 	if err != nil {
 		return nil, err
+	}
+
+	if xNode.shape.EqualDimensions(outShape) {
+		return xNode, nil
 	}
 
 	newDims64 := make([]int64, len(newDimensions))
@@ -147,7 +155,14 @@ func (f *Function) BroadcastInDim(x compute.Value, outputShape shapes.Shape, bro
 		reshapeDims[axis] = xNode.shape.Dimensions[i]
 	}
 
-	reshaped, err := f.Reshape(xNode, reshapeDims...)
+	reshaped := compute.Value(xNode)
+	if !xNode.shape.EqualDimensions(shapes.Make(xNode.shape.DType, reshapeDims...)) {
+		var err error
+		reshaped, err = f.Reshape(xNode, reshapeDims...)
+		if err != nil {
+			return nil, err
+		}
+	}
 	targetDims64 := make([]int64, outputShape.Rank())
 	for i, d := range outputShape.Dimensions {
 		targetDims64[i] = int64(d)
@@ -208,6 +223,19 @@ func (f *Function) Slice(x compute.Value, start []int, limit []int, stride []int
 	outShape, err := shapeinference.Slice(xNode.shape, start, limit, stride)
 	if err != nil {
 		return nil, err
+	}
+
+	if xNode.shape.EqualDimensions(outShape) {
+		allStridesOne := true
+		for _, s := range stride {
+			if s != 1 {
+				allStridesOne = false
+				break
+			}
+		}
+		if allStridesOne {
+			return xNode, nil
+		}
 	}
 
 	rank := xNode.shape.Rank()
@@ -407,17 +435,31 @@ func (f *Function) DynamicDimensionSize(operand compute.Value, axis int) (comput
 		return f.Constant([]int32{int32(xNode.shape.Dimensions[axis])})
 	}
 
-	dynShape, err := f.DynamicShape(xNode)
+	// Use ONNX Shape operator with start/end attributes (opset 13+) to extract the 1D slice directly.
+	shapeNode64 := f.addNode(&Node{
+		opType: "Shape",
+		inputs: []*Node{xNode},
+		shape:  shapes.Make(dtypes.Int64, 1),
+		attributes: []*onnx.AttributeProto{
+			{
+				Name: "start",
+				Type: onnx.AttributeProto_INT,
+				I:    int64(axis),
+			},
+			{
+				Name: "end",
+				Type: onnx.AttributeProto_INT,
+				I:    int64(axis + 1),
+			},
+		},
+	})
+
+	shapeNode32, err := f.ConvertDType(shapeNode64, dtypes.Int32)
 	if err != nil {
 		return nil, err
 	}
 
-	sliced, err := f.Slice(dynShape, []int{axis}, []int{axis + 1}, []int{1})
-	if err != nil {
-		return nil, err
-	}
-
-	return f.Reshape(sliced)
+	return f.Reshape(shapeNode32)
 }
 
 func (f *Function) DynamicReshape(operand compute.Value, dimensions ...compute.DynamicDimensionSpec) (compute.Value, error) {
@@ -600,19 +642,24 @@ func (f *Function) DynamicBroadcastInDim(operand compute.Value, broadcastAxes []
 			resolved := false
 			for operandAxis, outputAxis := range broadcastAxes {
 				if outputAxis == i && xNode.shape.Dimensions[operandAxis] == shapes.DynamicDim {
-					dimVal, err := f.DynamicDimensionSize(xNode, operandAxis)
-					if err != nil {
-						return nil, err
-					}
-					dimVal64, err := f.ConvertDType(dimVal, dtypes.Int64)
-					if err != nil {
-						return nil, err
-					}
-					reshapedDim, err := f.Reshape(dimVal64, 1)
-					if err != nil {
-						return nil, err
-					}
-					parts[i] = reshapedDim
+					shapeNode64 := f.addNode(&Node{
+						opType: "Shape",
+						inputs: []*Node{xNode},
+						shape:  shapes.Make(dtypes.Int64, 1),
+						attributes: []*onnx.AttributeProto{
+							{
+								Name: "start",
+								Type: onnx.AttributeProto_INT,
+								I:    int64(operandAxis),
+							},
+							{
+								Name: "end",
+								Type: onnx.AttributeProto_INT,
+								I:    int64(operandAxis + 1),
+							},
+						},
+					})
+					parts[i] = shapeNode64
 					resolved = true
 					break
 				}
