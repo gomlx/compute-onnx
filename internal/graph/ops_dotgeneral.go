@@ -148,83 +148,140 @@ func (f *Function) DotGeneral(
 
 	// 2. Optimization: Use standard MatMul for matrix multiplication when contracting 1 axis.
 	var lastNode *Node
-	batchAxesMatch := true
-	if len(lhsBatchAxes) != len(rhsBatchAxes) {
-		batchAxesMatch = false
-	} else {
-		for i, ba := range lhsBatchAxes {
-			if rhsBatchAxes[i] != ba {
-				batchAxesMatch = false
-				break
-			}
-		}
-	}
 
 	// ONNX MatMul operator only supports floating-point and 32/64-bit integer types.
 	matMulDTypeSupported := accumulationDType.IsFloat() ||
 		accumulationDType == dtypes.Int32 || accumulationDType == dtypes.Int64 ||
 		accumulationDType == dtypes.Uint32 || accumulationDType == dtypes.Uint64
 
-	canUseMatMul := matMulDTypeSupported && batchAxesMatch && len(lhsContractingAxes) == 1 && len(rhsContractingAxes) == 1 && lhsRank <= 2 && rhsRank <= 2
+	canUseMatMul := false
+	matLhs := lhsInput
+	matRhs := rhsInput
+	squeezeLhs := false
+	squeezeRhs := false
 
-	if canUseMatMul {
-		matLhs := lhsInput
-		matRhs := rhsInput
-		squeezeLhs := false
-		squeezeRhs := false
+	if matMulDTypeSupported && len(lhsContractingAxes) == 1 && len(rhsContractingAxes) == 1 {
+		lhsContract := lhsContractingAxes[0]
+		rhsContract := rhsContractingAxes[0]
 
-		// If LHS is 2D and contracting axis is 0, transpose LHS to [1, 0]
-		if lhsRank == 2 && len(lhsBatchAxes) == 0 && lhsContractingAxes[0] == 0 {
-			transLhs, err := f.Transpose(matLhs, 1, 0)
-			if err != nil {
-				return nil, err
-			}
-			matLhs = transLhs.(*Node)
-		}
-		// If RHS is 2D and contracting axis is 1, transpose RHS to [1, 0]
-		if rhsRank == 2 && len(rhsBatchAxes) == 0 && rhsContractingAxes[0] == 1 {
-			transRhs, err := f.Transpose(matRhs, 1, 0)
-			if err != nil {
-				return nil, err
-			}
-			matRhs = transRhs.(*Node)
-		}
-
-		// Recheck contracting axes positions for general case
-		curLhsContract := lhsContractingAxes[0]
-		if lhsRank == 2 && len(lhsBatchAxes) == 0 && lhsContractingAxes[0] == 0 {
-			curLhsContract = 1
-		}
-		curRhsContract := rhsContractingAxes[0]
-		if rhsRank == 2 && len(rhsBatchAxes) == 0 && rhsContractingAxes[0] == 1 {
-			curRhsContract = 0
-		}
-
-		if curLhsContract != matLhs.shape.Rank()-1 || (matRhs.shape.Rank() > 1 && curRhsContract != matRhs.shape.Rank()-2) {
-			// Cannot simple transpose to MatMul, fallback to Einsum
-			canUseMatMul = false
-		} else {
-			// ONNX Runtime WebGPU strictly requires 2D+ tensors for MatMul kernels.
-			// If LHS is 1D [K], unsqueeze to [1, K]
-			if lhsRank == 1 {
-				matLhsVal, err := f.Reshape(lhsInput, 1, lhsInput.shape.Dimensions[0])
-				if err != nil {
-					return nil, err
+		// Case A: 1D/2D Matrix Multiplication (ranks <= 2)
+		if lhsRank <= 2 && rhsRank <= 2 && len(lhsBatchAxes) == len(rhsBatchAxes) {
+			batchAxesMatch := true
+			for i, ba := range lhsBatchAxes {
+				if rhsBatchAxes[i] != ba {
+					batchAxesMatch = false
+					break
 				}
-				matLhs = matLhsVal.(*Node)
-				squeezeLhs = true
 			}
-			// If RHS is 1D [K], unsqueeze to [K, 1]
-			if rhsRank == 1 {
-				matRhsVal, err := f.Reshape(rhsInput, rhsInput.shape.Dimensions[0], 1)
-				if err != nil {
-					return nil, err
+			if batchAxesMatch {
+				// If LHS is 2D and contracting axis is 0, transpose LHS to [1, 0]
+				if lhsRank == 2 && len(lhsBatchAxes) == 0 && lhsContract == 0 {
+					transLhs, err := f.Transpose(matLhs, 1, 0)
+					if err != nil {
+						return nil, err
+					}
+					matLhs = transLhs.(*Node)
+					lhsContract = 1
 				}
-				matRhs = matRhsVal.(*Node)
-				squeezeRhs = true
-			}
+				// If RHS is 2D and contracting axis is 1, transpose RHS to [1, 0]
+				if rhsRank == 2 && len(rhsBatchAxes) == 0 && rhsContract == 1 {
+					transRhs, err := f.Transpose(matRhs, 1, 0)
+					if err != nil {
+						return nil, err
+					}
+					matRhs = transRhs.(*Node)
+					rhsContract = 0
+				}
 
-			// Calculate 2D matmul shape
+				if lhsContract == matLhs.shape.Rank()-1 && (matRhs.shape.Rank() <= 1 || rhsContract == matRhs.shape.Rank()-2) {
+					canUseMatMul = true
+					// ONNX Runtime WebGPU strictly requires 2D+ tensors for MatMul kernels.
+					if lhsRank == 1 {
+						matLhsVal, err := f.Reshape(matLhs, 1, matLhs.shape.Dimensions[0])
+						if err != nil {
+							return nil, err
+						}
+						matLhs = matLhsVal.(*Node)
+						squeezeLhs = true
+					}
+					if rhsRank == 1 {
+						matRhsVal, err := f.Reshape(matRhs, matRhs.shape.Dimensions[0], 1)
+						if err != nil {
+							return nil, err
+						}
+						matRhs = matRhsVal.(*Node)
+						squeezeRhs = true
+					}
+				}
+			}
+		}
+
+		// Case B: Batched Matrix Multiplication (e.g. Attention Q @ K^T and Attn @ V)
+		// Both LHS and RHS have rank >= 3 with identical leading contiguous batch axes 0..B-1,
+		// and each operand has exactly 2 non-batch trailing axes.
+		if !canUseMatMul && len(lhsBatchAxes) > 0 && len(lhsBatchAxes) == len(rhsBatchAxes) {
+			numBatch := len(lhsBatchAxes)
+			batchAxesMatch := true
+			for i := range numBatch {
+				if lhsBatchAxes[i] != i || rhsBatchAxes[i] != i {
+					batchAxesMatch = false
+					break
+				}
+			}
+			if batchAxesMatch && lhsRank == numBatch+2 && rhsRank == numBatch+2 {
+				if (lhsContract == numBatch || lhsContract == numBatch+1) &&
+					(rhsContract == numBatch || rhsContract == numBatch+1) {
+					// For LHS, contracting axis should be the last axis (numBatch+1)
+					if lhsContract == numBatch {
+						perm := make([]int, lhsRank)
+						for i := range numBatch {
+							perm[i] = i
+						}
+						perm[numBatch] = numBatch + 1
+						perm[numBatch+1] = numBatch
+						transLhs, err := f.Transpose(matLhs, perm...)
+						if err != nil {
+							return nil, err
+						}
+						matLhs = transLhs.(*Node)
+					}
+					// For RHS, contracting axis should be second-to-last (numBatch)
+					if rhsContract == numBatch+1 {
+						perm := make([]int, rhsRank)
+						for i := range numBatch {
+							perm[i] = i
+						}
+						perm[numBatch] = numBatch + 1
+						perm[numBatch+1] = numBatch
+						transRhs, err := f.Transpose(matRhs, perm...)
+						if err != nil {
+							return nil, err
+						}
+						matRhs = transRhs.(*Node)
+					}
+					canUseMatMul = true
+				}
+			}
+		}
+
+		// Case C: N-D LHS x 2D RHS (Dense projection, e.g. [..., inFeat] @ [inFeat, outFeat])
+		// LHS has rank >= 3, no batch axes, and contracts on the last axis.
+		// RHS has rank 2, no batch axes, and contracts on axis 0 (or axis 1 after transpose).
+		if !canUseMatMul && len(lhsBatchAxes) == 0 && len(rhsBatchAxes) == 0 && lhsRank >= 3 && rhsRank == 2 {
+			if lhsContract == lhsRank-1 && (rhsContract == 0 || rhsContract == 1) {
+				if rhsContract == 1 {
+					transRhs, err := f.Transpose(matRhs, 1, 0)
+					if err != nil {
+						return nil, err
+					}
+					matRhs = transRhs.(*Node)
+				}
+				canUseMatMul = true
+			}
+		}
+
+		if canUseMatMul {
+			// Calculate matmul output shape
 			matOutShape := outShape
 			if squeezeLhs || squeezeRhs {
 				matDims := make([]int, 0, len(outShape.Dimensions)+2)
