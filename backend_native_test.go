@@ -88,6 +88,7 @@ func TestParseConfig(t *testing.T) {
 		wantLog           int
 		wantCustomLibPath string
 		wantCacheDir      string
+		wantSessionConfig SessionConfig
 		wantErr           bool
 	}{
 		{config: "cpu", wantEP: executionprovider.CPU, wantLog: -1, wantCustomLibPath: ""},
@@ -104,12 +105,38 @@ func TestParseConfig(t *testing.T) {
 		// Auto-detection with a custom lib path depends on the GPUs present:
 		{config: cudaLibPath, wantEP: autoDetectedEP(cudaDir), wantLog: -1, wantCustomLibPath: cudaLibPath},
 		{config: "cuda," + cpuLibPath, wantEP: executionprovider.CUDA, wantLog: -1, wantCustomLibPath: cpuLibPath},
+		{
+			config: "onnx:cpu,intra_op_num_threads=1,inter_op_num_threads=1,cpu_mem_arena=false,execution_mode=parallel",
+			wantEP: executionprovider.CPU,
+			wantLog: -1,
+			wantSessionConfig: func() SessionConfig {
+				c := DefaultSessionConfig()
+				c.IntraOpNumThreads = 1
+				c.InterOpNumThreads = 1
+				f := false
+				c.CpuMemArena = &f
+				c.ExecutionMode = "parallel"
+				return c
+			}(),
+		},
+		{
+			config: "cpu,mem_pattern=false,graph_optimization_level=all",
+			wantEP: executionprovider.CPU,
+			wantLog: -1,
+			wantSessionConfig: func() SessionConfig {
+				c := DefaultSessionConfig()
+				f := false
+				c.MemPattern = &f
+				c.GraphOptimizationLevel = 99
+				return c
+			}(),
+		},
 		{config: "invalid_option_xyz", wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.config, func(t *testing.T) {
-			gotEP, gotLog, gotPath, gotCacheDir, err := parseConfig(tt.config)
+			gotEP, gotLog, gotPath, gotCacheDir, gotSessionConfig, err := parseConfig(tt.config)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseConfig(%q) error = %v, wantErr %v", tt.config, err, tt.wantErr)
 			}
@@ -125,6 +152,21 @@ func TestParseConfig(t *testing.T) {
 				}
 				if gotCacheDir != tt.wantCacheDir {
 					t.Errorf("gotMigraphxCacheDir = %q, want %q", gotCacheDir, tt.wantCacheDir)
+				}
+				if tt.wantSessionConfig.IntraOpNumThreads != 0 || tt.wantSessionConfig.ExecutionMode != "" || tt.wantSessionConfig.CpuMemArena != nil {
+					if gotSessionConfig.IntraOpNumThreads != tt.wantSessionConfig.IntraOpNumThreads {
+						t.Errorf("got IntraOpNumThreads = %d, want %d", gotSessionConfig.IntraOpNumThreads, tt.wantSessionConfig.IntraOpNumThreads)
+					}
+					if gotSessionConfig.InterOpNumThreads != tt.wantSessionConfig.InterOpNumThreads {
+						t.Errorf("got InterOpNumThreads = %d, want %d", gotSessionConfig.InterOpNumThreads, tt.wantSessionConfig.InterOpNumThreads)
+					}
+					if (gotSessionConfig.CpuMemArena == nil) != (tt.wantSessionConfig.CpuMemArena == nil) ||
+						(gotSessionConfig.CpuMemArena != nil && *gotSessionConfig.CpuMemArena != *tt.wantSessionConfig.CpuMemArena) {
+						t.Errorf("got CpuMemArena = %v, want %v", gotSessionConfig.CpuMemArena, tt.wantSessionConfig.CpuMemArena)
+					}
+					if gotSessionConfig.ExecutionMode != tt.wantSessionConfig.ExecutionMode {
+						t.Errorf("got ExecutionMode = %q, want %q", gotSessionConfig.ExecutionMode, tt.wantSessionConfig.ExecutionMode)
+					}
 				}
 			}
 		})
@@ -194,3 +236,57 @@ func TestConvGeneralFloat64(t *testing.T) {
 		backendtest.TestConvGeneral(t, b, nil)
 	})
 }
+
+func TestSessionOptionsEndToEnd(t *testing.T) {
+	b, err := New("cpu,intra_op_num_threads=1,inter_op_num_threads=1,cpu_mem_arena=false,execution_mode=parallel,mem_pattern=false,graph_optimization_level=all")
+	if err != nil {
+		t.Fatalf("Failed to create CPU backend with session options: %+v", err)
+	}
+	defer b.Finalize()
+
+	builder := b.Builder("test_session_options").(*Builder)
+	fn := builder.Main().(*Function)
+	param, err := fn.Parameter("x", shapes.Make(dtypes.Float32, 2, 2), nil)
+	if err != nil {
+		t.Fatalf("Failed to create parameter: %+v", err)
+	}
+	two, err := MakeScalar(fn, float32(2.0), dtypes.Float32)
+	if err != nil {
+		t.Fatalf("Failed to create scalar: %+v", err)
+	}
+	mulNode, err := fn.Mul(param.(*Node), two.(*Node))
+	if err != nil {
+		t.Fatalf("Failed to create Mul node: %+v", err)
+	}
+	fn.Return([]compute.Value{mulNode}, nil)
+
+	exec, err := builder.Compile()
+	if err != nil {
+		t.Fatalf("Failed to compile graph with session options: %+v", err)
+	}
+	defer exec.Finalize()
+
+	inputBuf, err := b.BufferFromFlatData(0, []float32{1.0, 2.0, 3.0, 4.0}, shapes.Make(dtypes.Float32, 2, 2))
+	if err != nil {
+		t.Fatalf("Failed to create input buffer: %+v", err)
+	}
+	defer inputBuf.Finalize()
+
+	results, err := exec.Execute([]compute.Buffer{inputBuf}, nil, 0)
+	if err != nil {
+		t.Fatalf("Failed to execute with session options: %+v", err)
+	}
+	defer results[0].Finalize()
+
+	got := make([]float32, 4)
+	if err := results[0].ToFlatData(got); err != nil {
+		t.Fatalf("Failed to read result data: %+v", err)
+	}
+	want := []float32{2.0, 4.0, 6.0, 8.0}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("results[%d] = %v, want %v", i, got[i], w)
+		}
+	}
+}
+

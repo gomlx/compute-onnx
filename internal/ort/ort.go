@@ -54,6 +54,14 @@ OrtStatus* wrapper_GetDimensions(const OrtApi* api, const OrtTensorTypeAndShapeI
 void wrapper_ReleaseTensorTypeAndShapeInfo(const OrtApi* api, OrtTensorTypeAndShapeInfo* info);
 OrtStatus* wrapper_AddInitializer(const OrtApi* api, OrtSessionOptions* options, const char* name, const OrtValue* val);
 OrtStatus* wrapper_SetSessionLogSeverityLevel(const OrtApi* api, OrtSessionOptions* options, int session_log_severity_level);
+OrtStatus* wrapper_SetIntraOpNumThreads(const OrtApi* api, OrtSessionOptions* options, int intra_op_num_threads);
+OrtStatus* wrapper_SetInterOpNumThreads(const OrtApi* api, OrtSessionOptions* options, int inter_op_num_threads);
+OrtStatus* wrapper_SetSessionExecutionMode(const OrtApi* api, OrtSessionOptions* options, int execution_mode);
+OrtStatus* wrapper_EnableCpuMemArena(const OrtApi* api, OrtSessionOptions* options);
+OrtStatus* wrapper_DisableCpuMemArena(const OrtApi* api, OrtSessionOptions* options);
+OrtStatus* wrapper_EnableMemPattern(const OrtApi* api, OrtSessionOptions* options);
+OrtStatus* wrapper_DisableMemPattern(const OrtApi* api, OrtSessionOptions* options);
+OrtStatus* wrapper_SetSessionGraphOptimizationLevel(const OrtApi* api, OrtSessionOptions* options, int graph_optimization_level);
 
 // IoBinding
 OrtStatus* wrapper_CreateIoBinding(const OrtApi* api, OrtSession* session, OrtIoBinding** out);
@@ -230,6 +238,46 @@ func (so *SessionOptions) AddInitializer(name string, val Value) error {
 
 func (so *SessionOptions) SetSessionLogSeverityLevel(level int) error {
 	status := C.wrapper_SetSessionLogSeverityLevel(ortApi, so.options, C.int(level))
+	return statusToError(status)
+}
+
+func (so *SessionOptions) SetIntraOpNumThreads(threads int) error {
+	status := C.wrapper_SetIntraOpNumThreads(ortApi, so.options, C.int(threads))
+	return statusToError(status)
+}
+
+func (so *SessionOptions) SetInterOpNumThreads(threads int) error {
+	status := C.wrapper_SetInterOpNumThreads(ortApi, so.options, C.int(threads))
+	return statusToError(status)
+}
+
+func (so *SessionOptions) SetExecutionMode(mode int) error {
+	status := C.wrapper_SetSessionExecutionMode(ortApi, so.options, C.int(mode))
+	return statusToError(status)
+}
+
+func (so *SessionOptions) SetCpuMemArena(enable bool) error {
+	var status *C.OrtStatus
+	if enable {
+		status = C.wrapper_EnableCpuMemArena(ortApi, so.options)
+	} else {
+		status = C.wrapper_DisableCpuMemArena(ortApi, so.options)
+	}
+	return statusToError(status)
+}
+
+func (so *SessionOptions) SetMemPattern(enable bool) error {
+	var status *C.OrtStatus
+	if enable {
+		status = C.wrapper_EnableMemPattern(ortApi, so.options)
+	} else {
+		status = C.wrapper_DisableMemPattern(ortApi, so.options)
+	}
+	return statusToError(status)
+}
+
+func (so *SessionOptions) SetGraphOptimizationLevel(level int) error {
+	status := C.wrapper_SetSessionGraphOptimizationLevel(ortApi, so.options, C.int(level))
 	return statusToError(status)
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
 	"github.com/gomlx/compute/shapes"
+	"github.com/gomlx/compute-onnx/internal/sessionconfig"
 	"github.com/pkg/errors"
 	"k8s.io/klog/v2"
 )
@@ -37,7 +38,7 @@ type MIGraphXOptions struct {
 
 // CreateSession creates an ONNX Runtime DynamicAdvancedSession with the given options.
 // The migraphxOptions arguments is only used for MIGraphX execution provider and may be nil.
-func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, executionProvider executionprovider.Type, logSeverity int, migraphxOptions *MIGraphXOptions) (*ort.DynamicAdvancedSession, error) {
+func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape, outputNames []string, executionProvider executionprovider.Type, logSeverity int, migraphxOptions *MIGraphXOptions, sessionConfig sessionconfig.Config) (*ort.DynamicAdvancedSession, error) {
 	options, err := ort.NewSessionOptions()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create ONNX Runtime SessionOptions")
@@ -98,6 +99,41 @@ func CreateSession(modelBytes []byte, inputNames []string, inputShapes []shapes.
 	err = options.SetSessionLogSeverityLevel(logSev)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to set ONNX Runtime session log severity level")
+	}
+
+	if sessionConfig.IntraOpNumThreads >= 0 {
+		if err := options.SetIntraOpNumThreads(sessionConfig.IntraOpNumThreads); err != nil {
+			return nil, errors.Wrap(err, "failed to set ONNX Runtime IntraOpNumThreads")
+		}
+	}
+	if sessionConfig.InterOpNumThreads >= 0 {
+		if err := options.SetInterOpNumThreads(sessionConfig.InterOpNumThreads); err != nil {
+			return nil, errors.Wrap(err, "failed to set ONNX Runtime InterOpNumThreads")
+		}
+	}
+	if sessionConfig.CpuMemArena != nil {
+		if err := options.SetCpuMemArena(*sessionConfig.CpuMemArena); err != nil {
+			return nil, errors.Wrap(err, "failed to set ONNX Runtime CpuMemArena")
+		}
+	}
+	if sessionConfig.MemPattern != nil {
+		if err := options.SetMemPattern(*sessionConfig.MemPattern); err != nil {
+			return nil, errors.Wrap(err, "failed to set ONNX Runtime MemPattern")
+		}
+	}
+	if sessionConfig.ExecutionMode != "" {
+		mode := 0 // ORT_SEQUENTIAL by default
+		if strings.EqualFold(sessionConfig.ExecutionMode, "parallel") || sessionConfig.ExecutionMode == "1" {
+			mode = 1 // ORT_PARALLEL
+		}
+		if err := options.SetExecutionMode(mode); err != nil {
+			return nil, errors.Wrap(err, "failed to set ONNX Runtime ExecutionMode")
+		}
+	}
+	if sessionConfig.GraphOptimizationLevel >= 0 {
+		if err := options.SetGraphOptimizationLevel(sessionConfig.GraphOptimizationLevel); err != nil {
+			return nil, errors.Wrap(err, "failed to set ONNX Runtime GraphOptimizationLevel")
+		}
 	}
 
 	session, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inputNames, outputNames, options)

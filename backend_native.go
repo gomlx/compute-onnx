@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -154,19 +155,20 @@ func initializeORT(executionProvider executionprovider.Type, customLibPath strin
 
 // parseConfig parses the backend configuration string and returns the selected GPU
 // execution provider ("cuda", "migraphx", or "" for CPU), log severity, custom ORT library path,
-// and the MIGraphX compiled-program cache directory ("" to disable caching).
-func parseConfig(config string) (executionProvider executionprovider.Type, logSeverity int, customLibPath string, migraphxCacheDir string, err error) {
+// the MIGraphX compiled-program cache directory ("" to disable caching), and runtime SessionConfig.
+func parseConfig(config string) (executionProvider executionprovider.Type, logSeverity int, customLibPath string, migraphxCacheDir string, sessionConfig SessionConfig, err error) {
 	executionProvider = executionprovider.CPU
 	hasProvider := false
 	logSeverity = -1 // not set
 	migraphxCacheDir = os.Getenv("GOMLX_MIGRAPHX_CACHE_DIR")
+	sessionConfig = DefaultSessionConfig()
 
 	if config == "" {
 		if envVal := os.Getenv("GOMLX_BACKEND"); envVal != "" {
 			var errEnv error
 			config, errEnv = ParseGOMLXBackendEnv(envVal)
 			if errEnv != nil {
-				return executionprovider.CPU, 0, "", "", errEnv
+				return executionprovider.CPU, 0, "", "", sessionConfig, errEnv
 			}
 		}
 	} else if strings.Contains(config, ":") || strings.EqualFold(config, "onnx") || strings.EqualFold(config, "onnxruntime") {
@@ -174,7 +176,7 @@ func parseConfig(config string) (executionProvider executionprovider.Type, logSe
 		if errEnv == nil {
 			config = parsed
 		} else if !isLibraryPath(config) && !strings.Contains(config, "=") {
-			return executionprovider.CPU, 0, "", "", errEnv
+			return executionprovider.CPU, 0, "", "", sessionConfig, errEnv
 		}
 	}
 
@@ -182,12 +184,12 @@ func parseConfig(config string) (executionProvider executionprovider.Type, logSe
 	if config == "" {
 		envPath := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
 		if envPath != "" {
-			return detectGPUProvider(filepath.Dir(envPath), false), -1, "", migraphxCacheDir, nil
+			return detectGPUProvider(filepath.Dir(envPath), false), -1, "", migraphxCacheDir, sessionConfig, nil
 		}
 		if installDir, installErr := onnxruntime.GetInstallPath(); installErr == nil {
-			return detectGPUProvider(installDir, true), -1, "", migraphxCacheDir, nil
+			return detectGPUProvider(installDir, true), -1, "", migraphxCacheDir, sessionConfig, nil
 		}
-		return detectGPUProvider("", true), -1, "", migraphxCacheDir, nil
+		return detectGPUProvider("", true), -1, "", migraphxCacheDir, sessionConfig, nil
 	}
 
 	parts := strings.SplitSeq(config, ",")
@@ -200,19 +202,70 @@ func parseConfig(config string) (executionProvider executionprovider.Type, logSe
 			kv := strings.SplitN(part, "=", 2)
 			key := strings.ToLower(strings.TrimSpace(kv[0]))
 			val := strings.TrimSpace(kv[1])
-			if key == "log" {
+			switch key {
+			case "log":
 				var level int
-				if _, err := fmt.Sscanf(val, "%d", &level); err != nil {
-					return executionprovider.CPU, 0, "", "", errors.Errorf("invalid log level: %q", val)
+				if _, errScan := fmt.Sscanf(val, "%d", &level); errScan != nil {
+					return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("invalid log level: %q", val)
 				}
 				severity := max(3-level, 0)
 				logSeverity = severity
-			} else if key == "migraphx_cache_dir" || key == "migraphxcachedir" {
+			case "migraphx_cache_dir", "migraphxcachedir":
 				migraphxCacheDir = val
-			} else if key == "web_version" || key == "webversion" {
+			case "web_version", "webversion":
 				// Ignored on native desktop platform.
-			} else {
-				return executionprovider.CPU, 0, "", "", errors.Errorf("unknown config option: %q", key)
+			case "intra_op_num_threads", "intraopnumthreads", "intra_threads":
+				n, errAtoi := strconv.Atoi(val)
+				if errAtoi != nil || n < 0 {
+					return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("invalid intra_op_num_threads %q: expected non-negative integer", val)
+				}
+				sessionConfig.IntraOpNumThreads = n
+			case "inter_op_num_threads", "interopnumthreads", "inter_threads":
+				n, errAtoi := strconv.Atoi(val)
+				if errAtoi != nil || n < 0 {
+					return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("invalid inter_op_num_threads %q: expected non-negative integer", val)
+				}
+				sessionConfig.InterOpNumThreads = n
+			case "cpu_mem_arena", "cpumemarena":
+				bVal, errBool := strconv.ParseBool(val)
+				if errBool != nil {
+					return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("invalid cpu_mem_arena %q: expected boolean", val)
+				}
+				sessionConfig.CpuMemArena = &bVal
+			case "mem_pattern", "mempattern":
+				bVal, errBool := strconv.ParseBool(val)
+				if errBool != nil {
+					return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("invalid mem_pattern %q: expected boolean", val)
+				}
+				sessionConfig.MemPattern = &bVal
+			case "execution_mode", "executionmode":
+				valLower := strings.ToLower(val)
+				if valLower != "parallel" && valLower != "sequential" && val != "0" && val != "1" {
+					return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("invalid execution_mode %q: expected \"parallel\" or \"sequential\"", val)
+				}
+				sessionConfig.ExecutionMode = valLower
+			case "graph_optimization_level", "graphoptimizationlevel", "opt_level", "optlevel":
+				valLower := strings.ToLower(val)
+				switch valLower {
+				case "0", "disable_all", "disable", "none":
+					sessionConfig.GraphOptimizationLevel = 0
+				case "1", "basic":
+					sessionConfig.GraphOptimizationLevel = 1
+				case "2", "extended":
+					sessionConfig.GraphOptimizationLevel = 2
+				case "3", "layout":
+					sessionConfig.GraphOptimizationLevel = 3
+				case "99", "all", "enable_all":
+					sessionConfig.GraphOptimizationLevel = 99
+				default:
+					n, errAtoi := strconv.Atoi(val)
+					if errAtoi != nil || n < 0 {
+						return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("invalid graph_optimization_level %q", val)
+					}
+					sessionConfig.GraphOptimizationLevel = n
+				}
+			default:
+				return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("unknown config option: %q", key)
 			}
 		} else {
 			partLower := strings.ToLower(part)
@@ -226,11 +279,27 @@ func parseConfig(config string) (executionProvider executionprovider.Type, logSe
 			case "cpu":
 				executionProvider = executionprovider.CPU
 				hasProvider = true
+			case "parallel":
+				sessionConfig.ExecutionMode = "parallel"
+			case "sequential":
+				sessionConfig.ExecutionMode = "sequential"
+			case "cpu_mem_arena":
+				t := true
+				sessionConfig.CpuMemArena = &t
+			case "no_cpu_mem_arena":
+				f := false
+				sessionConfig.CpuMemArena = &f
+			case "mem_pattern":
+				t := true
+				sessionConfig.MemPattern = &t
+			case "no_mem_pattern":
+				f := false
+				sessionConfig.MemPattern = &f
 			default:
 				if isLibraryPath(part) {
 					customLibPath = part
 				} else {
-					return executionprovider.CPU, 0, "", "", errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"migraphx\", path to ORT library, or key=value option", part)
+					return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("invalid config value %q: expected \"cpu\", \"cuda\", \"migraphx\", path to ORT library, or key=value option", part)
 				}
 			}
 		}
@@ -250,7 +319,7 @@ func parseConfig(config string) (executionProvider executionprovider.Type, logSe
 			executionProvider = detectGPUProvider(dir, true)
 		}
 	}
-	return executionProvider, logSeverity, customLibPath, migraphxCacheDir, nil
+	return executionProvider, logSeverity, customLibPath, migraphxCacheDir, sessionConfig, nil
 }
 
 // detectGPUProvider auto-detects which GPU execution provider to use: "cuda" if an NVIDIA GPU
@@ -283,7 +352,7 @@ func New(config string) (compute.Backend, error) {
 		return nil, errors.Errorf("onnxruntime backend is not supported on platform %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
-	executionProvider, logSeverity, customLibPath, migraphxCacheDir, err := parseConfig(config)
+	executionProvider, logSeverity, customLibPath, migraphxCacheDir, sessionConfig, err := parseConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -309,6 +378,7 @@ func New(config string) (compute.Backend, error) {
 		executionProvider: executionProvider,
 		migraphxCacheDir:  migraphxCacheDir,
 		logSeverity:       logSeverity,
+		sessionConfig:     sessionConfig,
 		hasFloat64:        true,
 		hasFloat16:        true,
 		hasBFloat16:       executionProvider == executionprovider.CUDA,
@@ -322,7 +392,7 @@ func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, input
 	if b.executionProvider == executionprovider.MIGraphX && b.migraphxCacheDir != "" {
 		migraphxOpts = &native.MIGraphXOptions{CacheDir: b.migraphxCacheDir}
 	}
-	session, err := native.CreateSession(modelBytes, inputNames, inputShapes, outputNames, b.executionProvider, b.logSeverity, migraphxOpts)
+	session, err := native.CreateSession(modelBytes, inputNames, inputShapes, outputNames, b.executionProvider, b.logSeverity, migraphxOpts, b.sessionConfig)
 	if err != nil {
 		return nil, err
 	}
