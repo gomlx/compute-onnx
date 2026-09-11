@@ -50,9 +50,32 @@ ONNX Runtime Internal Logging:
     - log=2: Informational (INFO)
     - log=3: Verbose (VERBOSE)
 
-Example:
+Runtime Session & Threading Options:
+  - intra_op_num_threads=<int>: Sets the number of threads used to parallelize execution within an operator (default: 0 = all available cores).
+    Aliases: intraopnumthreads, intra_threads.
+  - inter_op_num_threads=<int>: Sets the number of threads used to parallelize execution across independent operators (default: 0 = all available cores; only effective when execution_mode=parallel).
+    Aliases: interopnumthreads, inter_threads.
+  - execution_mode=<parallel|sequential>: Controls whether independent operators in the graph are executed sequentially or in parallel (default: sequential).
+    Can also be passed as standalone "parallel" or "sequential".
+    Aliases: executionmode.
+  - cpu_mem_arena=<bool>: Enables or disables ONNX Runtime's CPU memory allocator arena (default: true). Setting to false prevents allocator lock contention across concurrent threads.
+    Can also be passed as standalone "cpu_mem_arena" or "no_cpu_mem_arena".
+    Aliases: cpumemarena.
+  - mem_pattern=<bool>: Enables or disables memory pattern optimization (default: true; only available in sequential execution mode).
+    Can also be passed as standalone "mem_pattern" or "no_mem_pattern".
+    Aliases: mempattern.
+  - graph_optimization_level=<0|1|2|3|99>: Controls ONNX Runtime graph optimization level:
+    - 0 or "disable_all" / "none": Disable all graph optimizations.
+    - 1 or "basic": Basic graph optimizations (constant folding, redundant node elimination).
+    - 2 or "extended": Extended optimizations (operator fusions).
+    - 3 or "layout": Layout optimizations.
+    - 99 or "all": Enable all available optimizations.
+    Aliases: graphoptimizationlevel, opt_level, optlevel.
+
+Examples:
 
 	GOMLX_BACKEND="onnx:cuda,log=2"
+	GOMLX_BACKEND="onnx:cpu,intra_op_num_threads=1,inter_op_num_threads=1,cpu_mem_arena=false,execution_mode=parallel"
 
 # ONNX Runtime Shared Libraries & Auto-Installation
 
