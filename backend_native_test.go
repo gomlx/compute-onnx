@@ -131,6 +131,28 @@ func TestParseConfig(t *testing.T) {
 				return c
 			}(),
 		},
+		{
+			config: "cpu,session_clones=4",
+			wantEP: executionprovider.CPU,
+			wantLog: -1,
+			wantSessionConfig: func() SessionConfig {
+				c := DefaultSessionConfig()
+				c.SessionClones = 4
+				return c
+			}(),
+		},
+		{
+			config: "cpu,clones=12",
+			wantEP: executionprovider.CPU,
+			wantLog: -1,
+			wantSessionConfig: func() SessionConfig {
+				c := DefaultSessionConfig()
+				c.SessionClones = 12
+				return c
+			}(),
+		},
+		{config: "cpu,session_clones=0", wantErr: true},
+		{config: "cpu,session_clones=-1", wantErr: true},
 		{config: "invalid_option_xyz", wantErr: true},
 	}
 
@@ -153,7 +175,7 @@ func TestParseConfig(t *testing.T) {
 				if gotCacheDir != tt.wantCacheDir {
 					t.Errorf("gotMigraphxCacheDir = %q, want %q", gotCacheDir, tt.wantCacheDir)
 				}
-				if tt.wantSessionConfig.IntraOpNumThreads != 0 || tt.wantSessionConfig.ExecutionMode != "" || tt.wantSessionConfig.CpuMemArena != nil {
+				if tt.wantSessionConfig.IntraOpNumThreads != 0 || tt.wantSessionConfig.ExecutionMode != "" || tt.wantSessionConfig.CpuMemArena != nil || tt.wantSessionConfig.SessionClones > 0 {
 					if gotSessionConfig.IntraOpNumThreads != tt.wantSessionConfig.IntraOpNumThreads {
 						t.Errorf("got IntraOpNumThreads = %d, want %d", gotSessionConfig.IntraOpNumThreads, tt.wantSessionConfig.IntraOpNumThreads)
 					}
@@ -166,6 +188,9 @@ func TestParseConfig(t *testing.T) {
 					}
 					if gotSessionConfig.ExecutionMode != tt.wantSessionConfig.ExecutionMode {
 						t.Errorf("got ExecutionMode = %q, want %q", gotSessionConfig.ExecutionMode, tt.wantSessionConfig.ExecutionMode)
+					}
+					if tt.wantSessionConfig.SessionClones > 0 && gotSessionConfig.SessionClones != tt.wantSessionConfig.SessionClones {
+						t.Errorf("got SessionClones = %d, want %d", gotSessionConfig.SessionClones, tt.wantSessionConfig.SessionClones)
 					}
 				}
 			}
@@ -286,6 +311,75 @@ func TestSessionOptionsEndToEnd(t *testing.T) {
 	for i, w := range want {
 		if got[i] != w {
 			t.Errorf("results[%d] = %v, want %v", i, got[i], w)
+		}
+	}
+}
+
+func TestConcurrentExecutionSessionClones(t *testing.T) {
+	b, err := New("cpu,session_clones=4")
+	if err != nil {
+		t.Fatalf("Failed to create CPU backend: %+v", err)
+	}
+	defer b.Finalize()
+
+	builder := b.Builder("test_concurrent_clones").(*Builder)
+	fn := builder.Main().(*Function)
+	param, err := fn.Parameter("x", shapes.Make(dtypes.Float32, 2), nil)
+	if err != nil {
+		t.Fatalf("Failed to create parameter: %+v", err)
+	}
+	two, err := MakeScalar(fn, float32(2.0), dtypes.Float32)
+	if err != nil {
+		t.Fatalf("Failed to create scalar: %+v", err)
+	}
+	mulNode, err := fn.Mul(param.(*Node), two.(*Node))
+	if err != nil {
+		t.Fatalf("Failed to create Mul node: %+v", err)
+	}
+	fn.Return([]compute.Value{mulNode}, nil)
+
+	exec, err := builder.Compile()
+	if err != nil {
+		t.Fatalf("Failed to compile: %+v", err)
+	}
+	defer exec.Finalize()
+
+	const numGoroutines = 16
+	errChan := make(chan error, numGoroutines)
+
+	for g := 0; g < numGoroutines; g++ {
+		go func(id int) {
+			val := float32(id + 1)
+			buf, err := b.BufferFromFlatData(0, []float32{val, val * 3}, shapes.Make(dtypes.Float32, 2))
+			if err != nil {
+				errChan <- err
+				return
+			}
+			defer buf.Finalize()
+
+			res, err := exec.Execute([]compute.Buffer{buf}, nil, 0)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			defer res[0].Finalize()
+
+			got := make([]float32, 2)
+			if err := res[0].ToFlatData(got); err != nil {
+				errChan <- err
+				return
+			}
+			if got[0] != val*2 || got[1] != val*6 {
+				errChan <- fmt.Errorf("goroutine %d: got [%v, %v], want [%v, %v]", id, got[0], got[1], val*2, val*6)
+				return
+			}
+			errChan <- nil
+		}(g)
+	}
+
+	for g := 0; g < numGoroutines; g++ {
+		if err := <-errChan; err != nil {
+			t.Errorf("Concurrent execution error: %+v", err)
 		}
 	}
 }

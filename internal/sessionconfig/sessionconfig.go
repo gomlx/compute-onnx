@@ -11,6 +11,7 @@ type Config struct {
 	MemPattern             *bool  // Enable or disable memory pattern optimization (nil: unset/default)
 	ExecutionMode          string // "parallel" or "sequential" ("": unset/default)
 	GraphOptimizationLevel int    // Graph optimization level (0=disable, 1=basic, 2=extended, 99=all, -1: unset/default)
+	SessionClones          int    // Max concurrent session clones in the pool (<=0: unset/default)
 }
 
 // Default returns a Config with all options unset (indicating ONNX Runtime defaults).
@@ -19,5 +20,6 @@ func Default() Config {
 		IntraOpNumThreads:      -1,
 		InterOpNumThreads:      -1,
 		GraphOptimizationLevel: -1,
+		SessionClones:          -1,
 	}
 }

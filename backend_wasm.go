@@ -74,7 +74,9 @@ func parseConfig(config string) (ep executionprovider.Type, logSeverity int, ena
 				key == "mem_pattern" || key == "mempattern" ||
 				key == "execution_mode" || key == "executionmode" ||
 				key == "graph_optimization_level" || key == "graphoptimizationlevel" ||
-				key == "opt_level" || key == "optlevel" {
+				key == "opt_level" || key == "optlevel" ||
+				key == "session_clones" || key == "sessionclones" || key == "clones" ||
+				key == "session_pool" || key == "sessionpool" {
 				// Ignored on WASM/Web platform.
 			} else {
 				return executionprovider.CPU, 0, false, "", errors.Errorf("unknown configuration option %q", key)

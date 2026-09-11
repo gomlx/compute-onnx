@@ -264,6 +264,12 @@ func parseConfig(config string) (executionProvider executionprovider.Type, logSe
 					}
 					sessionConfig.GraphOptimizationLevel = n
 				}
+			case "session_clones", "sessionclones", "clones", "session_pool", "sessionpool":
+				n, errAtoi := strconv.Atoi(val)
+				if errAtoi != nil || n <= 0 {
+					return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("invalid %s %q: expected positive integer", key, val)
+				}
+				sessionConfig.SessionClones = n
 			default:
 				return executionprovider.CPU, 0, "", "", sessionConfig, errors.Errorf("unknown config option: %q", key)
 			}
@@ -400,7 +406,7 @@ func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, input
 	if b.keepModelProto {
 		savedModelProto = modelProto
 	}
-	return native.NewExecutable(b, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto, b.executionProvider), nil
+	return native.NewExecutable(b, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto, b.executionProvider, modelBytes, b.logSeverity, migraphxOpts, b.sessionConfig), nil
 }
 
 func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shape shapes.Shape) (compute.Buffer, error) {

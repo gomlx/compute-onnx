@@ -17,6 +17,7 @@ import (
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	ort "github.com/gomlx/compute-onnx/internal/ort"
+	"github.com/gomlx/compute-onnx/internal/sessionconfig"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
@@ -28,10 +29,18 @@ import (
 // migraphxMaxWarmUpRuns caps the number of per-shape warm-up runs (see migraphxWorkaround).
 const migraphxMaxWarmUpRuns = 8
 
+// sessionClone holds an individual ONNX Runtime session and its execution buffers.
+// Each clone is used by at most one execution at a time.
+type sessionClone struct {
+	session          *ort.DynamicAdvancedSession
+	cachedOrtInputs  []ort.Value
+	cachedOutWraps   []OrtTensorWrapper
+	cachedOrtOutputs []ort.Value
+}
+
 // Executable implements [compute.Executable] for ONNX Runtime native execution (CPU & CUDA).
 type Executable struct {
 	backend           compute.Backend
-	session           *ort.DynamicAdvancedSession
 	inputNames        []string
 	inputShapes       []shapes.Shape
 	outputNames       []string
@@ -39,16 +48,25 @@ type Executable struct {
 	reusableWrappers  []OrtTensorWrapper
 	executionProvider executionprovider.Type // GPU execution provider: CUDA, MIGraphX, or CPU only.
 
+	// Parameters to lazily spawn session clones on demand.
+	modelBytes    []byte
+	logSeverity   int
+	migraphxOpts  *MIGraphXOptions
+	sessionConfig sessionconfig.Config
+
+	// Clone pooling.
+	maxClones  int
+	clonesChan chan *sessionClone
+	allClones  []*sessionClone
+	numClones  int
+	cloneMu    sync.Mutex
+	finalized  bool
+
 	// warmedShapes tracks which input-shape signatures have already been through the
 	// MIGraphX first-eval warm-up (see migraphxWorkaround). Only used when executionProvider == MIGraphX.
 	warmedShapes map[string]bool
 
-	// Pre-allocated slices reused across Execute calls (CPU path only, single-threaded).
-	cachedOrtInputs  []ort.Value
-	cachedOutWraps   []OrtTensorWrapper
-	cachedOrtOutputs []ort.Value
-
-	// Mutex to protect reusableWrappers for concurrent buffer finalization.
+	// Mutex to protect reusableWrappers and warmedShapes.
 	mu sync.Mutex
 
 	modelProto *onnx.ModelProto
@@ -61,29 +79,53 @@ var _ compute.Executable = (*Executable)(nil)
 func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 	inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape,
-	modelProto *onnx.ModelProto, executionProvider executionprovider.Type) *Executable {
+	modelProto *onnx.ModelProto, executionProvider executionprovider.Type,
+	modelBytes []byte, logSeverity int, migraphxOpts *MIGraphXOptions, sessionConfig sessionconfig.Config) *Executable {
 
-	nInputs := len(inputNames)
-	nOutputs := len(outputShapes)
+	maxClones := sessionConfig.SessionClones
+	if maxClones <= 0 {
+		if executionProvider == executionprovider.CUDA || executionProvider == executionprovider.MIGraphX {
+			maxClones = 1
+		} else {
+			maxClones = 8
+		}
+	}
 
 	e := &Executable{
 		backend:           backend,
-		session:           session,
 		inputNames:        inputNames,
 		inputShapes:       inputShapes,
 		outputNames:       outputNames,
 		outputShapes:      outputShapes,
-		cachedOrtInputs:   make([]ort.Value, nInputs),
-		cachedOutWraps:    make([]OrtTensorWrapper, nOutputs),
-		cachedOrtOutputs:  make([]ort.Value, nOutputs),
 		modelProto:        modelProto,
 		executionProvider: executionProvider,
+		modelBytes:        modelBytes,
+		logSeverity:       logSeverity,
+		migraphxOpts:      migraphxOpts,
+		sessionConfig:     sessionConfig,
+		maxClones:         maxClones,
+		clonesChan:        make(chan *sessionClone, maxClones),
 	}
 	if executionProvider == executionprovider.MIGraphX {
 		e.warmedShapes = make(map[string]bool)
 	}
+
+	firstClone := e.newClone(session)
+	e.allClones = append(e.allClones, firstClone)
+	e.numClones = 1
+	e.clonesChan <- firstClone
+
 	runtime.SetFinalizer(e, (*Executable).Finalize)
 	return e
+}
+
+func (e *Executable) newClone(session *ort.DynamicAdvancedSession) *sessionClone {
+	return &sessionClone{
+		session:          session,
+		cachedOrtInputs:  make([]ort.Value, len(e.inputNames)),
+		cachedOutWraps:   make([]OrtTensorWrapper, len(e.outputShapes)),
+		cachedOrtOutputs: make([]ort.Value, len(e.outputShapes)),
+	}
 }
 
 // Backend returns the parent compute.Backend.
@@ -97,10 +139,22 @@ func (e *Executable) ModelProto() *onnx.ModelProto {
 }
 
 func (e *Executable) Finalize() {
-	if e.session != nil {
-		_ = e.session.Destroy()
-		e.session = nil
+	e.cloneMu.Lock()
+	if e.finalized {
+		e.cloneMu.Unlock()
+		return
 	}
+	e.finalized = true
+	close(e.clonesChan)
+	for _, clone := range e.allClones {
+		if clone != nil && clone.session != nil {
+			_ = clone.session.Destroy()
+			clone.session = nil
+		}
+	}
+	e.allClones = nil
+	e.cloneMu.Unlock()
+
 	e.mu.Lock()
 	for _, w := range e.reusableWrappers {
 		if w != nil {
@@ -158,25 +212,100 @@ func (e *Executable) matchesAnyOutput(dtype dtypes.DType, ortShape ort.Shape) bo
 }
 
 func (e *Executable) recycleWrapper(w OrtTensorWrapper) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.cloneMu.Lock()
+	finalized := e.finalized
+	e.cloneMu.Unlock()
 
-	if e.session == nil {
+	if finalized {
 		_ = w.Destroy()
 		return
 	}
 
-	if e.matchesAnyOutput(w.GetDType(), w.GetShape()) && len(e.reusableWrappers) < len(e.outputShapes)*2 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.matchesAnyOutput(w.GetDType(), w.GetShape()) && len(e.reusableWrappers) < len(e.outputShapes)*2*e.maxClones {
 		e.reusableWrappers = append(e.reusableWrappers, w)
 	} else {
 		_ = w.Destroy()
 	}
 }
 
-func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
-	if e.session == nil {
+// acquireClone returns an available session clone from the pool, creating a new one if below maxClones,
+// or blocking until a clone is returned to the pool.
+func (e *Executable) acquireClone() (*sessionClone, error) {
+	e.cloneMu.Lock()
+	if e.finalized {
+		e.cloneMu.Unlock()
 		return nil, errors.New("cannot execute finalized executable")
 	}
+
+	// 1. Return an idle clone if available.
+	select {
+	case clone := <-e.clonesChan:
+		e.cloneMu.Unlock()
+		return clone, nil
+	default:
+	}
+
+	// 2. Spawn a new clone on demand if below maxClones.
+	if e.numClones < e.maxClones {
+		e.numClones++
+		e.cloneMu.Unlock()
+
+		newSession, err := CreateSession(e.modelBytes, e.inputNames, e.inputShapes, e.outputNames, e.executionProvider, e.logSeverity, e.migraphxOpts, e.sessionConfig)
+		if err != nil {
+			e.cloneMu.Lock()
+			e.numClones--
+			e.cloneMu.Unlock()
+			return nil, errors.Wrap(err, "failed to create session clone")
+		}
+
+		clone := e.newClone(newSession)
+		e.cloneMu.Lock()
+		if e.finalized {
+			e.cloneMu.Unlock()
+			_ = newSession.Destroy()
+			return nil, errors.New("cannot execute finalized executable")
+		}
+		e.allClones = append(e.allClones, clone)
+		e.cloneMu.Unlock()
+		return clone, nil
+	}
+
+	e.cloneMu.Unlock()
+
+	// 3. Wait for a clone to become available in the pool.
+	clone, ok := <-e.clonesChan
+	if !ok || clone == nil {
+		return nil, errors.New("executable is finalized")
+	}
+	return clone, nil
+}
+
+// releaseClone returns a session clone to the free pool, or destroys it if the executable is finalized.
+func (e *Executable) releaseClone(clone *sessionClone) {
+	if clone == nil {
+		return
+	}
+	e.cloneMu.Lock()
+	defer e.cloneMu.Unlock()
+	if e.finalized {
+		if clone.session != nil {
+			_ = clone.session.Destroy()
+			clone.session = nil
+		}
+		return
+	}
+	e.clonesChan <- clone
+}
+
+func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
+	clone, err := e.acquireClone()
+	if err != nil {
+		return nil, err
+	}
+	defer e.releaseClone(clone)
 
 	isDummyInput := len(e.inputNames) == 1 && e.inputNames[0] == "dummy_input"
 	expectedInputs := len(e.inputNames)
@@ -212,17 +341,14 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 				ortInputs[i] = buf.wrapper.Value()
 			}
 		}
-		result, err := e.executeCUDA(ortInputs, inputs, donate, defaultDevice)
+		result, err := e.executeCUDA(clone, ortInputs, inputs, donate, defaultDevice)
 		if dummyWrapper != nil {
 			_ = dummyWrapper.Destroy()
 		}
 		return result, err
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Populate shared cachedOrtInputs.
+	// Populate clone's cachedOrtInputs.
 	var dummyInputWrapper OrtTensorWrapper
 	if isDummyInput {
 		wrapper, err := NewOrtTensorWrapper(e.inputShapes[0], []int32{0})
@@ -230,7 +356,7 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 			return nil, err
 		}
 		dummyInputWrapper = wrapper
-		e.cachedOrtInputs[0] = wrapper.Value()
+		clone.cachedOrtInputs[0] = wrapper.Value()
 	} else {
 		for i, inp := range inputs {
 			buf, ok := inp.(*Buffer)
@@ -240,7 +366,7 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 			if buf.wrapper == nil {
 				return nil, errors.Errorf("input %d is finalized", i)
 			}
-			e.cachedOrtInputs[i] = buf.wrapper.Value()
+			clone.cachedOrtInputs[i] = buf.wrapper.Value()
 		}
 	}
 
@@ -250,13 +376,13 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 		}()
 	}
 
-	return e.executeDefault(inputs, donate, defaultDevice)
+	return e.executeDefault(clone, inputs, donate, defaultDevice)
 }
 
-func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
+func (e *Executable) executeCUDA(clone *sessionClone, ortInputs []ort.Value, inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
 	defer runtime.KeepAlive(inputs)
 	defer runtime.KeepAlive(ortInputs)
-	ioBinding, err := e.session.CreateIoBinding()
+	ioBinding, err := clone.session.CreateIoBinding()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create IoBinding")
 	}
@@ -268,8 +394,8 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 	}
 	defer cudaMemInfo.Destroy()
 
-	cInputNames := e.session.CInputNames()
-	cOutputNames := e.session.COutputNames()
+	cInputNames := clone.session.CInputNames()
+	cOutputNames := clone.session.COutputNames()
 
 	for i := range ortInputs {
 		if err := ioBinding.BindInput(cInputNames[i], ortInputs[i]); err != nil {
@@ -290,9 +416,7 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 	if klog.V(2).Enabled() {
 		klog.Infof("Starting IoBinding.RunWithBinding on cuda (inputs=%d, outputs=%d)...", len(ortInputs), len(e.outputShapes))
 	}
-	e.mu.Lock()
 	err = ioBinding.RunWithBinding()
-	e.mu.Unlock()
 	if klog.V(1).Enabled() {
 		klog.Infof("Execution (CUDA) elapsed time: %s\n", humanize.Duration(time.Since(start)))
 	}
@@ -345,9 +469,18 @@ func (e *Executable) executeCUDA(ortInputs []ort.Value, inputs []compute.Buffer,
 
 // executeDefault executes the compiled graph for any non-specialized execution provider
 // (CPU and MIGraphX), using caller-preallocated or ONNX Runtime-allocated output buffers.
-func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
-	outWrappers := e.cachedOutWraps
-	ortOutputs := e.cachedOrtOutputs
+func (e *Executable) executeDefault(clone *sessionClone, inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
+	outWrappers := clone.cachedOutWraps
+	ortOutputs := clone.cachedOrtOutputs
+
+	defer func() {
+		for i := range clone.cachedOrtInputs {
+			clone.cachedOrtInputs[i] = nil
+		}
+		for i := range clone.cachedOrtOutputs {
+			clone.cachedOrtOutputs[i] = nil
+		}
+	}()
 
 	// The MIGraphX EP unreliably copies results into caller-preallocated (CPU) output
 	// buffers, so for it we let ONNX Runtime allocate the outputs instead and wrap
@@ -361,6 +494,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 			continue
 		}
 		matchedIdx := -1
+		e.mu.Lock()
 		for idx, rw := range e.reusableWrappers {
 			if wrapperMatchesShape(rw, sh) {
 				matchedIdx = idx
@@ -377,6 +511,7 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 		} else {
 			outWrappers[i] = nil
 		}
+		e.mu.Unlock()
 	}
 
 	for i, sh := range e.outputShapes {
@@ -404,18 +539,18 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 		start = time.Now()
 	}
 	if klog.V(2).Enabled() {
-		klog.Infof("Starting session.Run on CPU (inputs=%d, outputs=%d)...", len(e.cachedOrtInputs), len(ortOutputs))
+		klog.Infof("Starting session.Run on CPU (inputs=%d, outputs=%d)...", len(clone.cachedOrtInputs), len(ortOutputs))
 	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	if e.executionProvider == executionprovider.MIGraphX {
-		if err := e.migraphxWorkaround(); err != nil {
+		if err := e.migraphxWorkaround(clone); err != nil {
 			return nil, err
 		}
 	}
 
-	err := e.session.Run(e.cachedOrtInputs, ortOutputs)
+	err := clone.session.Run(clone.cachedOrtInputs, ortOutputs)
 	if klog.V(1).Enabled() {
 		klog.Infof("Execution (CPU) elapsed time: %s\n", humanize.Duration(time.Since(start)))
 	}
@@ -492,15 +627,18 @@ func (e *Executable) executeDefault(inputs []compute.Buffer, donate []bool, defa
 // evaluations for each distinct input-shape signature return uninitialized/garbage
 // outputs (the number of affected runs varies with the model). It detects new shapes
 // and repeats the run until the outputs stabilize, discarding all results.
-func (e *Executable) migraphxWorkaround() error {
-	key := inputShapeSignature(e.cachedOrtInputs)
-	if e.warmedShapes[key] {
+func (e *Executable) migraphxWorkaround(clone *sessionClone) error {
+	key := inputShapeSignature(clone.cachedOrtInputs)
+	e.mu.Lock()
+	warmed := e.warmedShapes[key]
+	e.mu.Unlock()
+	if warmed {
 		return nil
 	}
 	var prevBytes [][]byte
 	for i := 0; i < migraphxMaxWarmUpRuns; i++ {
 		dummyOutputs := make([]ort.Value, len(e.outputShapes))
-		if err := e.session.Run(e.cachedOrtInputs, dummyOutputs); err != nil {
+		if err := clone.session.Run(clone.cachedOrtInputs, dummyOutputs); err != nil {
 			return errors.Wrap(err, "migraphx warm-up run failed")
 		}
 		curBytes := make([][]byte, len(dummyOutputs))
@@ -541,7 +679,9 @@ func (e *Executable) migraphxWorkaround() error {
 			break
 		}
 	}
+	e.mu.Lock()
 	e.warmedShapes[key] = true
+	e.mu.Unlock()
 	return nil
 }
 

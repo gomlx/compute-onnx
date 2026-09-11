@@ -87,7 +87,6 @@ import "C"
 import (
 	"fmt"
 	"runtime"
-	"sync"
 	"unsafe"
 
 	"github.com/gomlx/compute/dtypes/bfloat16"
@@ -856,8 +855,6 @@ func (s *DynamicAdvancedSession) Destroy() error {
 	return nil
 }
 
-var runMu sync.Mutex
-
 func (s *DynamicAdvancedSession) Run(inputs []Value, outputs []Value) error {
 	defer runtime.KeepAlive(inputs)
 	nInputs := len(s.inputNames)
@@ -900,7 +897,6 @@ func (s *DynamicAdvancedSession) Run(inputs []Value, outputs []Value) error {
 		}
 	}
 
-	runMu.Lock()
 	status := C.wrapper_Run(
 		ortApi,
 		s.session.session,
@@ -912,7 +908,6 @@ func (s *DynamicAdvancedSession) Run(inputs []Value, outputs []Value) error {
 		C.size_t(nOutputs),
 		(**C.OrtValue)(unsafe.Pointer(outputValuesPtr)),
 	)
-	runMu.Unlock()
 
 	if err := statusToError(status); err != nil {
 		return err

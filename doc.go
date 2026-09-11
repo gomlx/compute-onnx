@@ -71,6 +71,9 @@ Runtime Session & Threading Options:
     - 3 or "layout": Layout optimizations.
     - 99 or "all": Enable all available optimizations.
     Aliases: graphoptimizationlevel, opt_level, optlevel.
+  - session_clones=<int>: Maximum number of concurrent ONNX Runtime session clones pooled per compiled Executable (default: 8 on CPU, 1 on GPU).
+    Clones are allocated lazily on demand when multiple goroutines execute concurrently, eliminating lock contention.
+    Aliases: sessionclones, clones, session_pool, sessionpool.
 
 Examples:
 

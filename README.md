@@ -87,6 +87,8 @@ Fine-tune ONNX Runtime session execution, multi-threading, and memory behavior:
   - `3` / `layout`: Layout optimizations.
   - `99` / `all`: Enable all available optimizations.
   - Aliases: `graphoptimizationlevel`, `opt_level`, `optlevel`.
+- **`session_clones=<int>`**: Maximum number of concurrent ONNX Runtime session clones pooled per compiled Executable. Default is `8` on CPU (`1` on GPU). Clones are allocated on-demand as concurrent goroutines execute, eliminating session lock contention across workers while avoiding unnecessary memory allocation for single-threaded tasks.
+  - Aliases: `sessionclones`, `clones`, `session_pool`, `sessionpool`.
 
 **Example for high-throughput multi-worker concurrent inference**:
 ```bash
