@@ -403,11 +403,11 @@ func (f *Function) DynamicShape(operand compute.Value) (compute.Value, error) {
 	rank := xNode.shape.Rank()
 
 	if !xNode.shape.IsDynamic() {
-		dims32 := make([]int32, rank)
+		dims64 := make([]int64, rank)
 		for i, d := range xNode.shape.Dimensions {
-			dims32[i] = int32(d)
+			dims64[i] = int64(d)
 		}
-		return f.Constant(dims32, rank)
+		return f.Constant(dims64, rank)
 	}
 
 	shape64 := shapes.Make(dtypes.Int64, rank)
@@ -417,7 +417,7 @@ func (f *Function) DynamicShape(operand compute.Value) (compute.Value, error) {
 		shape:  shape64,
 	})
 
-	return f.ConvertDType(shapeNode64, dtypes.Int32)
+	return shapeNode64, nil
 }
 
 func (f *Function) DynamicDimensionSize(operand compute.Value, axis int) (compute.Value, error) {
@@ -432,7 +432,7 @@ func (f *Function) DynamicDimensionSize(operand compute.Value, axis int) (comput
 	}
 
 	if !xNode.shape.IsDynamic() || xNode.shape.Dimensions[axis] != shapes.DynamicDim {
-		return f.Constant([]int32{int32(xNode.shape.Dimensions[axis])})
+		return f.Constant([]int64{int64(xNode.shape.Dimensions[axis])})
 	}
 
 	// Use ONNX Shape operator with start/end attributes (opset 13+) to extract the 1D slice directly.
@@ -454,12 +454,7 @@ func (f *Function) DynamicDimensionSize(operand compute.Value, axis int) (comput
 		},
 	})
 
-	shapeNode32, err := f.ConvertDType(shapeNode64, dtypes.Int32)
-	if err != nil {
-		return nil, err
-	}
-
-	return f.Reshape(shapeNode32)
+	return f.Reshape(shapeNode64)
 }
 
 func (f *Function) DynamicReshape(operand compute.Value, dimensions ...compute.DynamicDimensionSpec) (compute.Value, error) {

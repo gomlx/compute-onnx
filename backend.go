@@ -170,6 +170,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		PreferConstantsForVariables: true,
 		DynamicAxes:                 true,
 		DynamicShapes:               compute.DynamicShapesNative,
+		DynamicDimDType:             dtypes.Int64,
 	}
 	if b.executionProvider == executionprovider.MIGraphX {
 		// The MIGraphX execution provider reliably supports only a subset of dtypes;
