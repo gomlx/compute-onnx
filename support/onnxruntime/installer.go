@@ -59,6 +59,103 @@ func GetLibFilename() (string, error) {
 	}
 }
 
+// GetInstalledVersion returns the normalized version string of the ONNX Runtime library
+// currently installed in targetDir (e.g., "1.30.0"). If targetDir is empty, it checks
+// the default install directory.
+// If no library is installed, it returns "" and nil.
+// If the library is present but its version cannot be determined, it returns "" and nil.
+func GetInstalledVersion(targetDir string) (string, error) {
+	installDir := targetDir
+	if installDir == "" {
+		var err error
+		installDir, err = GetInstallPath()
+		if err != nil {
+			return "", err
+		}
+	} else {
+		installDir = filepath.Clean(installDir)
+	}
+
+	libFilename, err := GetLibFilename()
+	if err != nil {
+		return "", err
+	}
+
+	targetPath := filepath.Join(installDir, libFilename)
+	if _, err := os.Stat(targetPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", errors.Wrapf(err, "failed to stat library at %s", targetPath)
+	}
+
+	// 1. Check VERSION or .version file.
+	for _, vName := range []string{"VERSION", ".version"} {
+		vPath := filepath.Join(installDir, vName)
+		if data, err := os.ReadFile(vPath); err == nil {
+			ver := strings.TrimSpace(string(data))
+			if ver != "" {
+				return NormalizeVersion(ver), nil
+			}
+		}
+	}
+
+	// 2. Check libonnxruntime.pc pkg-config file.
+	for _, pcName := range []string{"libonnxruntime.pc", filepath.Join("pkgconfig", "libonnxruntime.pc")} {
+		pcPath := filepath.Join(installDir, pcName)
+		if data, err := os.ReadFile(pcPath); err == nil {
+			if ver := parseVersionFromPC(string(data)); ver != "" {
+				return NormalizeVersion(ver), nil
+			}
+		}
+	}
+
+	// 3. Check resolved symlink of the library file.
+	if resolved, err := filepath.EvalSymlinks(targetPath); err == nil {
+		base := filepath.Base(resolved)
+		if ver := parseVersionFromLibName(base); ver != "" {
+			return NormalizeVersion(ver), nil
+		}
+	}
+
+	return "", nil
+}
+
+func parseVersionFromPC(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Version:") {
+			ver := strings.TrimSpace(strings.TrimPrefix(line, "Version:"))
+			if ver != "" {
+				return ver
+			}
+		}
+	}
+	return ""
+}
+
+func parseVersionFromLibName(base string) string {
+	// Linux: libonnxruntime.so.<version> (e.g. libonnxruntime.so.1.30.0)
+	if strings.HasPrefix(base, "libonnxruntime.so.") {
+		ver := strings.TrimPrefix(base, "libonnxruntime.so.")
+		parts := strings.Split(ver, ".")
+		if len(parts) >= 2 {
+			return ver
+		}
+	}
+	// macOS: libonnxruntime.<version>.dylib (e.g. libonnxruntime.1.20.0.dylib)
+	if strings.HasPrefix(base, "libonnxruntime.") && strings.HasSuffix(base, ".dylib") {
+		ver := strings.TrimPrefix(base, "libonnxruntime.")
+		ver = strings.TrimSuffix(ver, ".dylib")
+		parts := strings.Split(ver, ".")
+		if len(parts) >= 2 {
+			return ver
+		}
+	}
+	return ""
+}
+
 // GetDefaultCUDAVersion attempts to guess the CUDA version based on installed libraries found on standard paths,
 // or via nvcc if available. It returns the major version as a string (e.g., "12"). If nothing is found, it defaults to "12".
 func GetDefaultCUDAVersion() string {
@@ -180,7 +277,7 @@ type githubRelease struct {
 var knownLatestPatch = map[string]string{
 	"1.27": "1.27.1",
 	"1.24": "1.24.4",
-	"1.29": "1.29.0",
+	"1.29": "1.29.1",
 	"1.30": "1.30.0",
 }
 
@@ -523,6 +620,7 @@ func GetLatestVersion(cuda bool) (string, error) {
 // Install downloads and installs the ONNX Runtime library if not already present.
 // It returns the absolute path to the main shared library file.
 func Install(version string, cuda bool, cudaVersion string, targetDir string, force bool) (string, error) {
+	specifiedVersion := (version != "")
 	version = NormalizeVersion(version)
 	if version == "" {
 		version = DefaultVersion
@@ -554,16 +652,23 @@ func Install(version string, cuda bool, cudaVersion string, targetDir string, fo
 	targetPath := filepath.Join(installDir, libFilename)
 	if !force {
 		if _, err := os.Stat(targetPath); err == nil {
-			if !cuda {
-				return targetPath, nil
+			if specifiedVersion {
+				if installedVersion, _ := GetInstalledVersion(installDir); installedVersion != "" && installedVersion != version {
+					force = true
+				}
 			}
-			cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
-			if _, err := os.Stat(cudaLibPath); err == nil {
-				return targetPath, nil
-			}
-			cudaLibPathWin := filepath.Join(installDir, "onnxruntime_providers_cuda.dll")
-			if _, err := os.Stat(cudaLibPathWin); err == nil {
-				return targetPath, nil
+			if !force {
+				if !cuda {
+					return targetPath, nil
+				}
+				cudaLibPath := filepath.Join(installDir, "libonnxruntime_providers_cuda.so")
+				if _, err := os.Stat(cudaLibPath); err == nil {
+					return targetPath, nil
+				}
+				cudaLibPathWin := filepath.Join(installDir, "onnxruntime_providers_cuda.dll")
+				if _, err := os.Stat(cudaLibPathWin); err == nil {
+					return targetPath, nil
+				}
 			}
 		}
 	}
@@ -629,6 +734,12 @@ func Install(version string, cuda bool, cudaVersion string, targetDir string, fo
 			return "", errors.Wrapf(err, "failed to move extracted file %s to %s", file.Name(), dest)
 		}
 		fmt.Printf("Installed %s\n", dest)
+	}
+
+	// Write VERSION file to record the installed version.
+	versionFile := filepath.Join(installDir, "VERSION")
+	if err := os.WriteFile(versionFile, []byte(version+"\n"), 0644); err != nil {
+		klog.Warningf("failed to write version file %s: %v", versionFile, err)
 	}
 
 	return targetPath, nil

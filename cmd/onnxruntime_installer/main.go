@@ -33,7 +33,21 @@ func main() {
 		return
 	}
 
-	libPath, err := onnxruntime.Install(*flagVersion, *flagCuda, *flagCudaVersion, *flagTarget, *flagForce)
+	force := *flagForce
+	if *flagVersion != "" {
+		installedVersion, err := onnxruntime.GetInstalledVersion(*flagTarget)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to determine installed ONNX Runtime version: %+v\n", err)
+		} else if installedVersion != "" {
+			requestedVersion := onnxruntime.NormalizeVersion(*flagVersion)
+			if installedVersion != requestedVersion {
+				fmt.Printf("Installed version (%s) is different from requested version (%s); forcing installation.\n", installedVersion, requestedVersion)
+				force = true
+			}
+		}
+	}
+
+	libPath, err := onnxruntime.Install(*flagVersion, *flagCuda, *flagCudaVersion, *flagTarget, force)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error installing ONNX Runtime: %+v\n", err)
 		os.Exit(1)

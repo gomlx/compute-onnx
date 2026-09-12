@@ -118,9 +118,9 @@ func TestNormalizeVersion(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"1.29", "1.29.0"},
-		{"v1.29", "1.29.0"},
-		{"V1.29", "1.29.0"},
+		{"1.29", "1.29.1"},
+		{"v1.29", "1.29.1"},
+		{"V1.29", "1.29.1"},
 		{"1.29.0", "1.29.0"},
 		{"v1.29.0", "1.29.0"},
 		{"1.27", "1.27.1"},
@@ -170,3 +170,142 @@ func TestInstallMigraphxWithCustomTarget(t *testing.T) {
 		t.Errorf("second non-forced install should be a no-op success, got: %+v", err)
 	}
 }
+
+func TestParseVersionFromPC(t *testing.T) {
+	samplePC := `prefix=/usr/local
+bindir=${prefix}/bin
+mandir=${prefix}/share/man
+docdir=${prefix}/share/doc/onnxruntime
+libdir=${prefix}/lib64
+includedir=${prefix}/include/onnxruntime
+
+Name: onnxruntime
+Description: ONNX runtime
+URL: https://github.com/microsoft/onnxruntime
+Version: 1.30.0
+Libs: -L${libdir} -lonnxruntime
+Cflags: -I${includedir}
+`
+	ver := parseVersionFromPC(samplePC)
+	if ver != "1.30.0" {
+		t.Errorf("parseVersionFromPC: got %q, want \"1.30.0\"", ver)
+	}
+
+	if verEmpty := parseVersionFromPC("Name: onnxruntime\n"); verEmpty != "" {
+		t.Errorf("parseVersionFromPC without Version: got %q, want \"\"", verEmpty)
+	}
+}
+
+func TestParseVersionFromLibName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"libonnxruntime.so.1.30.0", "1.30.0"},
+		{"libonnxruntime.so.1.27.1", "1.27.1"},
+		{"libonnxruntime.so.1", ""},
+		{"libonnxruntime.so", ""},
+		{"libonnxruntime.1.20.0.dylib", "1.20.0"},
+		{"libonnxruntime.dylib", ""},
+		{"onnxruntime.dll", ""},
+	}
+
+	for _, tt := range tests {
+		got := parseVersionFromLibName(tt.input)
+		if got != tt.expected {
+			t.Errorf("parseVersionFromLibName(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestGetInstalledVersion(t *testing.T) {
+	libFilename, err := GetLibFilename()
+	if err != nil {
+		t.Fatalf("GetLibFilename failed: %+v", err)
+	}
+
+	// 1. Empty directory: no version installed
+	emptyDir := t.TempDir()
+	ver, err := GetInstalledVersion(emptyDir)
+	if err != nil {
+		t.Fatalf("GetInstalledVersion on empty dir returned error: %+v", err)
+	}
+	if ver != "" {
+		t.Errorf("GetInstalledVersion on empty dir: got %q, want \"\"", ver)
+	}
+
+	// 2. Directory with VERSION file and dummy lib file
+	verDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(verDir, libFilename), []byte("dummy"), 0755); err != nil {
+		t.Fatalf("failed to write dummy lib: %+v", err)
+	}
+	if err := os.WriteFile(filepath.Join(verDir, "VERSION"), []byte("1.27.0\n"), 0644); err != nil {
+		t.Fatalf("failed to write VERSION file: %+v", err)
+	}
+	ver, err = GetInstalledVersion(verDir)
+	if err != nil {
+		t.Fatalf("GetInstalledVersion on VERSION dir returned error: %+v", err)
+	}
+	if ver != "1.27.0" {
+		t.Errorf("GetInstalledVersion on VERSION dir: got %q, want \"1.27.0\"", ver)
+	}
+
+	// 3. Directory with libonnxruntime.pc
+	pcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pcDir, libFilename), []byte("dummy"), 0755); err != nil {
+		t.Fatalf("failed to write dummy lib: %+v", err)
+	}
+	samplePC := "Name: onnxruntime\nVersion: 1.29.1\n"
+	if err := os.WriteFile(filepath.Join(pcDir, "libonnxruntime.pc"), []byte(samplePC), 0644); err != nil {
+		t.Fatalf("failed to write .pc file: %+v", err)
+	}
+	ver, err = GetInstalledVersion(pcDir)
+	if err != nil {
+		t.Fatalf("GetInstalledVersion on pcDir returned error: %+v", err)
+	}
+	if ver != "1.29.1" {
+		t.Errorf("GetInstalledVersion on pcDir: got %q, want \"1.29.1\"", ver)
+	}
+}
+
+func TestInstallForcesDifferentVersion(t *testing.T) {
+	targetDir := t.TempDir()
+
+	// Install 1.27.0 initially
+	libPath, err := Install("1.27.0", false, "", targetDir, false)
+	if err != nil {
+		t.Fatalf("Initial Install 1.27.0 failed: %+v", err)
+	}
+	if _, err := os.Stat(libPath); err != nil {
+		t.Fatalf("Installed lib not found: %+v", err)
+	}
+
+	ver, err := GetInstalledVersion(targetDir)
+	if err != nil {
+		t.Fatalf("GetInstalledVersion failed: %+v", err)
+	}
+	if ver != "1.27.0" {
+		t.Errorf("installed version: got %q, want \"1.27.0\"", ver)
+	}
+
+	// Non-forced install of the same version should succeed without re-downloading
+	_, err = Install("1.27.0", false, "", targetDir, false)
+	if err != nil {
+		t.Fatalf("Second install of 1.27.0 failed: %+v", err)
+	}
+
+	// Non-forced install of a DIFFERENT version (1.27.1) should detect the difference and install 1.27.1
+	_, err = Install("1.27.1", false, "", targetDir, false)
+	if err != nil {
+		t.Fatalf("Install of 1.27.1 failed: %+v", err)
+	}
+
+	ver, err = GetInstalledVersion(targetDir)
+	if err != nil {
+		t.Fatalf("GetInstalledVersion after update failed: %+v", err)
+	}
+	if ver != "1.27.1" {
+		t.Errorf("installed version after upgrade: got %q, want \"1.27.1\"", ver)
+	}
+}
+
