@@ -181,6 +181,7 @@ var knownLatestPatch = map[string]string{
 	"1.27": "1.27.1",
 	"1.24": "1.24.4",
 	"1.29": "1.29.0",
+	"1.30": "1.30.0",
 }
 
 // ResolveLatestPatchVersion queries GitHub releases to find the highest patch version for a given major.minor string (e.g. "1.27" -> "1.27.1").
