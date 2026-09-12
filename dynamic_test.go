@@ -73,15 +73,15 @@ func TestDynamicOps(t *testing.T) {
 			t.Fatalf("expected 3 outputs, got %d", len(outputs))
 		}
 
-		shapeData := make([]int32, 2)
+		shapeData := make([]int64, 2)
 		if err := outputs[0].ToFlatData(shapeData); err != nil {
 			t.Fatalf("ToFlatData failed: %v", err)
 		}
-		if !slices.Equal(shapeData, []int32{2, 4}) {
+		if !slices.Equal(shapeData, []int64{2, 4}) {
 			t.Fatalf("expected shape [2, 4], got %v", shapeData)
 		}
 
-		d0Data := make([]int32, 1)
+		d0Data := make([]int64, 1)
 		if err := outputs[1].ToFlatData(d0Data); err != nil {
 			t.Fatalf("ToFlatData failed: %v", err)
 		}
@@ -89,7 +89,7 @@ func TestDynamicOps(t *testing.T) {
 			t.Fatalf("expected dim0=2, got %d", d0Data[0])
 		}
 
-		d1Data := make([]int32, 1)
+		d1Data := make([]int64, 1)
 		if err := outputs[2].ToFlatData(d1Data); err != nil {
 			t.Fatalf("ToFlatData failed: %v", err)
 		}

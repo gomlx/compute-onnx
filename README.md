@@ -66,6 +66,35 @@ Configuration can be specified in the `GOMLX_BACKEND` environment variable using
   GOMLX_BACKEND=onnx
   ```
 
+### Runtime Session & Threading Options
+
+Fine-tune ONNX Runtime session execution, multi-threading, and memory behavior:
+
+- **`intra_op_num_threads=<int>`**: Sets the number of threads used to parallelize execution within an operator. Default is `0` (ORT uses all available CPU cores). When running multiple concurrent worker threads or goroutines, setting this to `1` prevents thread oversubscription.
+  - Aliases: `intra_threads`, `intraopnumthreads`
+- **`inter_op_num_threads=<int>`**: Sets the number of threads used to parallelize execution across independent operators in the graph (only effective when `execution_mode=parallel`). Default is `0`.
+  - Aliases: `inter_threads`, `interopnumthreads`
+- **`execution_mode=<parallel|sequential>`**: Controls whether independent operators in the computation graph execute sequentially or in parallel.
+  - Aliases: `executionmode`, or standalone `parallel` / `sequential`.
+- **`cpu_mem_arena=<bool>`**: Enables or disables ONNX Runtime's CPU memory arena allocator. Default is `true`. Disabling (`cpu_mem_arena=false` or `no_cpu_mem_arena`) reduces memory lock contention when multiple worker threads execute concurrently.
+  - Aliases: `cpumemarena`, or standalone `cpu_mem_arena` / `no_cpu_mem_arena`.
+- **`mem_pattern=<bool>`**: Enables or disables memory pattern optimization (tracing and reusing memory allocations for static shapes). Default is `true`. Only valid in sequential execution mode.
+  - Aliases: `mempattern`, or standalone `mem_pattern` / `no_mem_pattern`.
+- **`graph_optimization_level=<level>`**: Controls the graph optimization level applied by ONNX Runtime:
+  - `0` / `disable_all` / `none`: Disable all optimizations.
+  - `1` / `basic`: Basic optimizations (constant folding, redundant node elimination).
+  - `2` / `extended`: Extended optimizations (operator fusions such as LayerNorm, GELU, MatMul+Add).
+  - `3` / `layout`: Layout optimizations.
+  - `99` / `all`: Enable all available optimizations.
+  - Aliases: `graphoptimizationlevel`, `opt_level`, `optlevel`.
+- **`session_clones=<int>`**: Maximum number of concurrent ONNX Runtime session clones pooled per compiled Executable. Default is `8` on CPU (`1` on GPU). Clones are allocated on-demand as concurrent goroutines execute, eliminating session lock contention across workers while avoiding unnecessary memory allocation for single-threaded tasks.
+  - Aliases: `sessionclones`, `clones`, `session_pool`, `sessionpool`.
+
+**Example for high-throughput multi-worker concurrent inference**:
+```bash
+GOMLX_BACKEND="onnx:cpu,intra_op_num_threads=1,inter_op_num_threads=1,cpu_mem_arena=false,execution_mode=parallel"
+```
+
 ### Save Model To ONNX
 
 This allows one to export GOMLX trained (or fine-tuned) models to ONNX.

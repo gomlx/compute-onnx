@@ -68,6 +68,16 @@ func parseConfig(config string) (ep executionprovider.Type, logSeverity int, ena
 				}
 			} else if key == "web_version" || key == "webversion" {
 				webVersion = val
+			} else if key == "intra_op_num_threads" || key == "intraopnumthreads" || key == "intra_threads" ||
+				key == "inter_op_num_threads" || key == "interopnumthreads" || key == "inter_threads" ||
+				key == "cpu_mem_arena" || key == "cpumemarena" ||
+				key == "mem_pattern" || key == "mempattern" ||
+				key == "execution_mode" || key == "executionmode" ||
+				key == "graph_optimization_level" || key == "graphoptimizationlevel" ||
+				key == "opt_level" || key == "optlevel" ||
+				key == "session_clones" || key == "sessionclones" || key == "clones" ||
+				key == "session_pool" || key == "sessionpool" {
+				// Ignored on WASM/Web platform.
 			} else {
 				return executionprovider.CPU, 0, false, "", errors.Errorf("unknown configuration option %q", key)
 			}
@@ -86,6 +96,10 @@ func parseConfig(config string) (ep executionprovider.Type, logSeverity int, ena
 		} else if partLower == "webnn" {
 			ep = executionprovider.WebNN
 			hasEP = true
+		} else if partLower == "parallel" || partLower == "sequential" ||
+			partLower == "cpu_mem_arena" || partLower == "no_cpu_mem_arena" ||
+			partLower == "mem_pattern" || partLower == "no_mem_pattern" {
+			// Ignored on WASM/Web platform.
 		} else if partLower == "graph_capture" || partLower == "graphcapture" {
 			enableGraphCapture = true
 		} else {

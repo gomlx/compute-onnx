@@ -10,6 +10,7 @@ import (
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	"github.com/gomlx/compute-onnx/internal/graph"
+	"github.com/gomlx/compute-onnx/internal/sessionconfig"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/pkg/errors"
@@ -29,6 +30,13 @@ func MakeScalar(f *graph.Function, value any, dtype dtypes.DType) (compute.Value
 	return graph.MakeScalar(f, value, dtype)
 }
 
+// SessionConfig holds runtime session options (such as threading and memory settings)
+// configured via the backend configuration string.
+type SessionConfig = sessionconfig.Config
+
+// DefaultSessionConfig returns a SessionConfig with all options unset (ONNX Runtime defaults).
+var DefaultSessionConfig = sessionconfig.Default
+
 // Backend represents an ONNX Runtime backed [compute.Backend].
 type Backend struct {
 	config             string
@@ -37,12 +45,18 @@ type Backend struct {
 	migraphxCacheDir   string                 // Native MIGraphX compiled-program cache directory ("migraphx_cache_dir" config key); empty disables caching.
 	webVersion         string
 	logSeverity        int
+	sessionConfig      SessionConfig
 	enableGraphCapture bool
 	hasFloat64         bool
 	hasFloat16         bool
 	hasBFloat16        bool
 	isFinalized        bool
 	keepModelProto     bool
+}
+
+// SessionConfig returns the session options configured for this backend.
+func (b *Backend) SessionConfig() SessionConfig {
+	return b.sessionConfig
 }
 
 // SetKeepModelProto controls whether compiled Executable instances retain the graph *onnx.ModelProto.
@@ -156,6 +170,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		PreferConstantsForVariables: true,
 		DynamicAxes:                 true,
 		DynamicShapes:               compute.DynamicShapesNative,
+		DynamicDimDType:             dtypes.Int64,
 	}
 	if b.executionProvider == executionprovider.MIGraphX {
 		// The MIGraphX execution provider reliably supports only a subset of dtypes;

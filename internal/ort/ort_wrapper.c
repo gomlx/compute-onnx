@@ -150,6 +150,38 @@ OrtStatus* wrapper_SetSessionLogSeverityLevel(const OrtApi* api, OrtSessionOptio
     return api->SetSessionLogSeverityLevel(options, session_log_severity_level);
 }
 
+OrtStatus* wrapper_SetIntraOpNumThreads(const OrtApi* api, OrtSessionOptions* options, int intra_op_num_threads) {
+    return api->SetIntraOpNumThreads(options, intra_op_num_threads);
+}
+
+OrtStatus* wrapper_SetInterOpNumThreads(const OrtApi* api, OrtSessionOptions* options, int inter_op_num_threads) {
+    return api->SetInterOpNumThreads(options, inter_op_num_threads);
+}
+
+OrtStatus* wrapper_SetSessionExecutionMode(const OrtApi* api, OrtSessionOptions* options, int execution_mode) {
+    return api->SetSessionExecutionMode(options, (ExecutionMode)execution_mode);
+}
+
+OrtStatus* wrapper_EnableCpuMemArena(const OrtApi* api, OrtSessionOptions* options) {
+    return api->EnableCpuMemArena(options);
+}
+
+OrtStatus* wrapper_DisableCpuMemArena(const OrtApi* api, OrtSessionOptions* options) {
+    return api->DisableCpuMemArena(options);
+}
+
+OrtStatus* wrapper_EnableMemPattern(const OrtApi* api, OrtSessionOptions* options) {
+    return api->EnableMemPattern(options);
+}
+
+OrtStatus* wrapper_DisableMemPattern(const OrtApi* api, OrtSessionOptions* options) {
+    return api->DisableMemPattern(options);
+}
+
+OrtStatus* wrapper_SetSessionGraphOptimizationLevel(const OrtApi* api, OrtSessionOptions* options, int graph_optimization_level) {
+    return api->SetSessionGraphOptimizationLevel(options, (GraphOptimizationLevel)graph_optimization_level);
+}
+
 // --- IoBinding wrappers ---
 
 OrtStatus* wrapper_CreateIoBinding(const OrtApi* api, OrtSession* session, OrtIoBinding** out) {
