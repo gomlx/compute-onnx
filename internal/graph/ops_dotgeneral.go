@@ -281,8 +281,9 @@ func (f *Function) DotGeneral(
 		}
 
 		if canUseMatMul {
-			// Calculate matmul output shape
-			matOutShape := outShape
+			// Calculate matmul output shape (ONNX MatMul always produces accumulationDType).
+			matOutShape := outShape.Clone()
+			matOutShape.DType = accumulationDType
 			if squeezeLhs || squeezeRhs {
 				matDims := make([]int, 0, len(outShape.Dimensions)+2)
 				for i := 0; i < lhsRank-1; i++ {
@@ -357,21 +358,12 @@ func (f *Function) DotGeneral(
 		f.nodes = append(f.nodes, einsumNode)
 		lastNode = einsumNode
 	}
-	if outShape.Rank() == 0 {
-		newDimsConst, err := f.Constant([]int64{}, 0)
+	if lastNode.shape.Rank() != outShape.Rank() {
+		reshaped, err := f.Reshape(lastNode, outShape.Dimensions...)
 		if err != nil {
 			return nil, err
 		}
-
-		f.nodeCount++
-		reshapeNode := &Node{
-			name:   fmt.Sprintf("node_%d", f.nodeCount),
-			opType: "Reshape",
-			inputs: []*Node{lastNode, newDimsConst.(*Node)},
-			shape:  outShape,
-		}
-		f.nodes = append(f.nodes, reshapeNode)
-		lastNode = reshapeNode
+		lastNode = reshaped.(*Node)
 	}
 
 	// Cast to final output type if necessary

@@ -357,7 +357,6 @@ func (f *Function) FusedActivation(x compute.Value, cfg compute.ActivationConfig
 	}
 }
 
-
 // FusedLayerNorm applies layer normalization over specified axes using ONNX LayerNormalization (opset 17+).
 func (f *Function) FusedLayerNorm(x compute.Value, axes []int, epsilon float64, gamma, beta compute.Value) (compute.Value, error) {
 	xNode, ok := x.(*Node)
@@ -992,8 +991,11 @@ func (f *Function) FusedQuantizedDense(x, weights, bias compute.Value, weightsQu
 
 // FusedAttentionQKVProjection performs fused Query-Key-Value projection.
 func (f *Function) FusedAttentionQKVProjection(
-	x, wQKV, biasQ, biasK, biasV compute.Value,
-	queryDim, keyValueDim int) (query, key, value compute.Value, err error) {
+	x compute.Value,
+	wQKV compute.Value,
+	biasQ, biasK, biasV compute.Value,
+	queryDim, keyValueDim int,
+) (query, key, value compute.Value, err error) {
 	xNode, ok1 := x.(*Node)
 	wNode, ok2 := wQKV.(*Node)
 	if !ok1 || !ok2 {
@@ -1005,43 +1007,54 @@ func (f *Function) FusedAttentionQKVProjection(
 		return nil, nil, nil, errors.Errorf("FusedAttentionQKVProjection: x must be at least 2D [batch..., inFeatures], got rank %d", xRank)
 	}
 
-	xShape := xNode.shape
-	inFeatures := xShape.Dimensions[xRank-1]
-	batchDims := xShape.Dimensions[:xRank-1]
-	flatBatch := 1
-	for _, d := range batchDims {
-		flatBatch *= d
-	}
-
-	var x2D *Node = xNode
-	if xRank > 2 {
-		xReshaped, err := f.Reshape(xNode, flatBatch, inFeatures)
-		if err != nil {
-			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: reshaping x to 2D failed")
-		}
-		x2D = xReshaped.(*Node)
-	}
-
-	// Compute matmul: y = x2D @ wQKV -> shape [flatBatch, queryDim + 2*keyValueDim]
-	yVal, err := f.DotGeneral(x2D, []int{1}, nil, wNode, []int{0}, nil, compute.DotGeneralConfig{})
+	// Compute matmul: y = x @ wQKV -> shape [batch..., queryDim + 2*keyValueDim]
+	lastAxis := xRank - 1
+	yVal, err := f.DotGeneral(xNode, []int{lastAxis}, nil, wNode, []int{0}, nil, compute.DotGeneralConfig{})
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: matmul failed")
 	}
 
 	totalDim := queryDim + 2*keyValueDim
 
-	// Slice Q, K, V along axis 1
-	qSlice, err := f.Slice(yVal, []int{0, 0}, []int{flatBatch, queryDim}, []int{1, 1})
+	// Prepare slice starts/limits/strides along the last axis
+	qStarts := make([]int, xRank)
+	qLimits := make([]int, xRank)
+	kStarts := make([]int, xRank)
+	kLimits := make([]int, xRank)
+	vStarts := make([]int, xRank)
+	vLimits := make([]int, xRank)
+	strides := make([]int, xRank)
+
+	for i := 0; i < lastAxis; i++ {
+		dim := xNode.shape.Dimensions[i]
+		qLimits[i] = dim
+		kLimits[i] = dim
+		vLimits[i] = dim
+		strides[i] = 1
+	}
+	strides[lastAxis] = 1
+
+	qStarts[lastAxis] = 0
+	qLimits[lastAxis] = queryDim
+
+	kStarts[lastAxis] = queryDim
+	kLimits[lastAxis] = queryDim + keyValueDim
+
+	vStarts[lastAxis] = queryDim + keyValueDim
+	vLimits[lastAxis] = totalDim
+
+	// Slice Q, K, V along the last axis
+	qSlice, err := f.Slice(yVal, qStarts, qLimits, strides)
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: slicing Q failed")
 	}
 
-	kSlice, err := f.Slice(yVal, []int{0, queryDim}, []int{flatBatch, queryDim + keyValueDim}, []int{1, 1})
+	kSlice, err := f.Slice(yVal, kStarts, kLimits, strides)
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: slicing K failed")
 	}
 
-	vSlice, err := f.Slice(yVal, []int{0, queryDim + keyValueDim}, []int{flatBatch, totalDim}, []int{1, 1})
+	vSlice, err := f.Slice(yVal, vStarts, vLimits, strides)
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: slicing V failed")
 	}
@@ -1093,26 +1106,6 @@ func (f *Function) FusedAttentionQKVProjection(
 		valueRes, err = f.Add(valueRes, bvReshaped)
 		if err != nil {
 			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: adding biasV failed")
-		}
-	}
-
-	// If x was higher rank (> 2), reshape Q, K, V back to [batchDims..., queryDim/keyValueDim]
-	if xRank > 2 {
-		qDims := append(append([]int(nil), batchDims...), queryDim)
-		kDims := append(append([]int(nil), batchDims...), keyValueDim)
-		vDims := append(append([]int(nil), batchDims...), keyValueDim)
-
-		queryRes, err = f.Reshape(queryRes, qDims...)
-		if err != nil {
-			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: reshaping Q back to original rank failed")
-		}
-		keyRes, err = f.Reshape(keyRes, kDims...)
-		if err != nil {
-			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: reshaping K back to original rank failed")
-		}
-		valueRes, err = f.Reshape(valueRes, vDims...)
-		if err != nil {
-			return nil, nil, nil, errors.Wrap(err, "FusedAttentionQKVProjection: reshaping V back to original rank failed")
 		}
 	}
 
