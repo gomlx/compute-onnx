@@ -1,7 +1,7 @@
 github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=
 github.com/go-logr/logr v1.4.3/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
-github.com/gomlx/compute-onnx v0.1.12 h1:xwL1Y6poe+KEwWklFEYOtOMMZXdyDyLWAS+Fyw6PZ2w=
-github.com/gomlx/compute-onnx v0.1.12/go.mod h1:H9QsJcQOETsA2X4JXDCP86CvlvMUp88F9VErGAoGBG8=
+github.com/gomlx/compute-onnx v0.1.13 h1:vWXWSYEfCXFeSe4J6xW6zAR1U0gztZaRwzuH7uHeP78=
+github.com/gomlx/compute-onnx v0.1.13/go.mod h1:Dki8DhaOXvLWWqUKnckAf3ATUC7Bz1f6M7Y+OuMK740=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 k8s.io/klog/v2 v2.140.0 h1:Tf+J3AH7xnUzZyVVXhTgGhEKnFqye14aadWv7bzXdzc=
