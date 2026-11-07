@@ -1093,11 +1093,54 @@ func (f *Function) Iota(shape shapes.Shape, iotaAxis int) (compute.Value, error)
 	return f.BroadcastInDim(rangeVal, shape, []int{iotaAxis})
 }
 
+// reshapeWithDynamicFrom reshapes operand to targetDims, pulling any DynamicDim sizes from origX via targetToOrigAxis.
+func (f *Function) reshapeWithDynamicFrom(operand *Node, targetDims []int, origX *Node, targetToOrigAxis []int) (*Node, error) {
+	if !origX.shape.IsDynamic() {
+		res, err := f.Reshape(operand, targetDims...)
+		if err != nil {
+			return nil, err
+		}
+		return res.(*Node), nil
+	}
+	specs := make([]compute.DynamicDimensionSpec, len(targetDims))
+	for k, d := range targetDims {
+		if d == shapes.DynamicDim {
+			origAxis := targetToOrigAxis[k]
+			dimVal, err := f.DynamicDimensionSize(origX, origAxis)
+			if err != nil {
+				return nil, err
+			}
+			axisName := origX.shape.AxisName(origAxis)
+			if axisName == "" {
+				axisName = shapes.AnonymousAxis
+			}
+			specs[k] = compute.DynamicDimensionSpec{
+				Name:  axisName,
+				Value: dimVal,
+			}
+		} else {
+			specs[k] = compute.DynamicDimensionSpec{Static: d}
+		}
+	}
+	res, err := f.DynamicReshape(operand, specs...)
+	if err != nil {
+		return nil, err
+	}
+	return res.(*Node), nil
+}
+
 // Pad injects padding on the start, end, or interior of the given operand.
 func (f *Function) Pad(x, fillValue compute.Value, axesConfig ...compute.PadAxis) (compute.Value, error) {
 	xNode, ok := x.(*Node)
 	if !ok {
 		return nil, errors.New("Pad: input must be a valid onnxruntime node")
+	}
+	padScalar, ok := fillValue.(*Node)
+	if !ok {
+		return nil, errors.New("Pad: fillValue must be a valid onnxruntime node")
+	}
+	if padScalar.shape.DType != xNode.shape.DType {
+		return nil, errors.Errorf("Pad: fillValue DType (%s) must match operand DType (%s)", padScalar.shape.DType, xNode.shape.DType)
 	}
 
 	outShape, err := shapeinference.Pad(xNode.shape, axesConfig...)
@@ -1106,35 +1149,34 @@ func (f *Function) Pad(x, fillValue compute.Value, axesConfig ...compute.PadAxis
 	}
 
 	rank := xNode.shape.Rank()
-	for _, cfg := range axesConfig {
-		if cfg.Interior != 0 {
-			return nil, errors.Wrap(compute.ErrNotImplemented, "interior padding is not supported by ONNX Pad")
-		}
+	if rank == 0 {
+		return xNode, nil
 	}
 
-	padsList := make([]int64, 2*rank)
+	effectiveConfig := make([]compute.PadAxis, rank)
+	hasAnyPad := false
+	hasInterior := false
 	for i := range rank {
-		padBefore := 0
-		padAfter := 0
 		if i < len(axesConfig) {
-			padBefore = axesConfig[i].Start
-			padAfter = axesConfig[i].End
+			effectiveConfig[i] = axesConfig[i]
 		}
-		padsList[i] = int64(padBefore)
-		padsList[i+rank] = int64(padAfter)
+		if xNode.shape.Dimensions[i] >= 0 && xNode.shape.Dimensions[i] <= 1 {
+			// Interior padding only affects axes with > 1 elements.
+			effectiveConfig[i].Interior = 0
+		}
+		cfg := effectiveConfig[i]
+		if cfg.Start != 0 || cfg.End != 0 || cfg.Interior != 0 {
+			hasAnyPad = true
+		}
+		if cfg.Interior > 0 {
+			hasInterior = true
+		}
+	}
+	if !hasAnyPad {
+		return xNode, nil
 	}
 
-	padsConst, err := f.Constant(padsList, 2*rank)
-	if err != nil {
-		return nil, err
-	}
-
-	padScalar, ok := fillValue.(*Node)
-	if !ok {
-		return nil, errors.New("Pad: fillValue must be a valid onnxruntime node")
-	}
 	if padScalar.shape.Rank() != 0 {
-		var errReshape error
 		res, errReshape := f.Reshape(padScalar)
 		if errReshape != nil {
 			return nil, errReshape
@@ -1142,19 +1184,169 @@ func (f *Function) Pad(x, fillValue compute.Value, axesConfig ...compute.PadAxis
 		padScalar = res.(*Node)
 	}
 
-	padNode := &Node{
-		opType: "Pad",
-		inputs: []*Node{xNode, padsConst.(*Node), padScalar},
-		shape:  outShape,
-		attributes: []*onnx.AttributeProto{
-			{
-				Name: "mode",
-				Type: onnx.AttributeProto_STRING,
-				S:    []byte("constant"),
-			},
-		},
+	if !xNode.shape.IsDynamic() && xNode.shape.Size() == 0 {
+		if outShape.Size() == 0 {
+			return f.Reshape(xNode, outShape.Dimensions...)
+		}
+		return f.BroadcastInDim(padScalar, outShape, nil)
 	}
-	return f.addNode(padNode), nil
+
+	curr := xNode
+
+	// Step A: Handle interior padding by splitting each axis with Interior > 0 into (D_i, 1),
+	// padding the size-1 axis by (0, Interior), and reshaping back to D_i * (1 + Interior).
+	// The extra Interior elements at the end of axis i are then compensated by subtracting Interior from End.
+	if hasInterior {
+		var expandedDims []int
+		var expandedToOrig []int
+		var paddedExpandedDims []int
+		var padsBefore []int64
+		var padsAfter []int64
+		mergedDims := make([]int, rank)
+		identityToOrig := make([]int, rank)
+
+		for i := range rank {
+			identityToOrig[i] = i
+			dim := curr.shape.Dimensions[i]
+			interior := effectiveConfig[i].Interior
+			if interior > 0 {
+				expandedDims = append(expandedDims, dim, 1)
+				expandedToOrig = append(expandedToOrig, i, i)
+				paddedExpandedDims = append(paddedExpandedDims, dim, 1+interior)
+				padsBefore = append(padsBefore, 0, 0)
+				padsAfter = append(padsAfter, 0, int64(interior))
+				mergedDims[i] = dim * (1 + interior)
+				effectiveConfig[i].End -= interior
+				effectiveConfig[i].Interior = 0
+			} else {
+				expandedDims = append(expandedDims, dim)
+				expandedToOrig = append(expandedToOrig, i)
+				paddedExpandedDims = append(paddedExpandedDims, dim)
+				padsBefore = append(padsBefore, 0)
+				padsAfter = append(padsAfter, 0)
+				mergedDims[i] = dim
+			}
+		}
+
+		expandedNode, err := f.reshapeWithDynamicFrom(curr, expandedDims, xNode, expandedToOrig)
+		if err != nil {
+			return nil, err
+		}
+
+		intPadsList := append(padsBefore, padsAfter...)
+		intPadsConst, err := f.Constant(intPadsList, len(intPadsList))
+		if err != nil {
+			return nil, err
+		}
+
+		paddedExpandedShape := shapes.Make(curr.shape.DType, paddedExpandedDims...)
+		if curr.shape.IsDynamic() {
+			axisNames := make([]string, len(paddedExpandedDims))
+			for k, d := range paddedExpandedDims {
+				if d == shapes.DynamicDim {
+					axisNames[k] = xNode.shape.AxisName(expandedToOrig[k])
+				}
+			}
+			paddedExpandedShape = shapes.MakeDynamic(curr.shape.DType, paddedExpandedDims, axisNames)
+		}
+
+		intPadNode := f.addNode(&Node{
+			opType: "Pad",
+			inputs: []*Node{expandedNode, intPadsConst.(*Node), padScalar},
+			shape:  paddedExpandedShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "mode",
+					Type: onnx.AttributeProto_STRING,
+					S:    []byte("constant"),
+				},
+			},
+		})
+
+		curr, err = f.reshapeWithDynamicFrom(intPadNode, mergedDims, xNode, identityToOrig)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Step B: Handle edge cropping (negative Start/End via Slice) and edge padding (positive Start/End via Pad).
+	sliceStarts := make([]int, rank)
+	sliceEnds := make([]int, rank)
+	strides := make([]int, rank)
+	needsSlice := false
+	needsPad := false
+	padsList := make([]int64, 2*rank)
+
+	for i := range rank {
+		strides[i] = 1
+		dim := curr.shape.Dimensions[i]
+		s := effectiveConfig[i].Start
+		e := effectiveConfig[i].End
+
+		if dim == shapes.DynamicDim {
+			sliceStarts[i] = 0
+			sliceEnds[i] = shapes.DynamicDim
+			continue
+		}
+
+		sliceStart := max(0, -s)
+		sliceEnd := min(dim, dim+e)
+		if sliceStart >= sliceEnd {
+			// All elements of curr along axis i are cropped out.
+			if outShape.Dimensions[i] > 0 {
+				if !outShape.IsDynamic() {
+					return f.BroadcastInDim(padScalar, outShape, nil)
+				}
+			}
+			sliceStart = 0
+			sliceEnd = 0
+		}
+		sliceStarts[i] = sliceStart
+		sliceEnds[i] = sliceEnd
+		if sliceStart > 0 || sliceEnd < dim {
+			needsSlice = true
+		}
+
+		padBefore := max(0, s)
+		padAfter := max(0, e)
+		padsList[i] = int64(padBefore)
+		padsList[i+rank] = int64(padAfter)
+		if padBefore > 0 || padAfter > 0 {
+			needsPad = true
+		}
+	}
+
+	if needsSlice {
+		slicedVal, err := f.Slice(curr, sliceStarts, sliceEnds, strides)
+		if err != nil {
+			return nil, err
+		}
+		curr = slicedVal.(*Node)
+	}
+
+	if needsPad {
+		padsConst, err := f.Constant(padsList, 2*rank)
+		if err != nil {
+			return nil, err
+		}
+
+		padNode := &Node{
+			opType: "Pad",
+			inputs: []*Node{curr, padsConst.(*Node), padScalar},
+			shape:  outShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "mode",
+					Type: onnx.AttributeProto_STRING,
+					S:    []byte("constant"),
+				},
+			},
+		}
+		curr = f.addNode(padNode)
+	}
+
+	curr.shape = outShape
+	return curr, nil
 }
 
 // DynamicIota constructs an ONNX Range node for dynamic/static iotaAxis and broadcasts it to target dimensions.
@@ -1251,20 +1443,188 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 	}
 
 	rank := xNode.shape.Rank()
-	padsBeforeList := make([]compute.Value, rank)
-	padsAfterList := make([]compute.Value, rank)
+	if rank == 0 {
+		return xNode, nil
+	}
+
+	padScalar, ok := fillValue.(*Node)
+	if !ok {
+		return nil, errors.New("DynamicPad: fillValue must be a valid onnxruntime node")
+	}
+	if padScalar.shape.Rank() != 0 {
+		res, errReshape := f.Reshape(padScalar)
+		if errReshape != nil {
+			return nil, errReshape
+		}
+		padScalar = res.(*Node)
+	}
 
 	zeroInt64, err := f.Constant([]int64{0}, 1)
 	if err != nil {
 		return nil, err
 	}
 
+	curr := xNode
+	interiorNodes := make([]compute.Value, rank)
+	hasInterior := false
 	for i := range rank {
 		if i < len(axesConfig) {
 			cfg := axesConfig[i]
-			if cfg.InteriorValue != nil || cfg.Interior != 0 {
-				return nil, errors.Wrap(compute.ErrNotImplemented, "interior padding is not supported by ONNX Pad")
+			dim := xNode.shape.Dimensions[i]
+			if cfg.InteriorValue != nil || (cfg.Interior > 0 && (dim == shapes.DynamicDim || dim > 1)) {
+				hasInterior = true
+				break
 			}
+		}
+	}
+
+	if hasInterior {
+		var expandedSpecs []compute.DynamicDimensionSpec
+		var intPadsBefore []compute.Value
+		var intPadsAfter []compute.Value
+		var paddedExpandedDims []int
+		var paddedExpandedNames []string
+		mergedSpecs := make([]compute.DynamicDimensionSpec, rank)
+
+		for i := range rank {
+			dim := xNode.shape.Dimensions[i]
+			var dimSpec compute.DynamicDimensionSpec
+			if dim == shapes.DynamicDim {
+				dimVal, err := f.DynamicDimensionSize(xNode, i)
+				if err != nil {
+					return nil, err
+				}
+				axisName := xNode.shape.AxisName(i)
+				if axisName == "" {
+					axisName = shapes.AnonymousAxis
+				}
+				dimSpec = compute.DynamicDimensionSpec{Name: axisName, Value: dimVal}
+			} else {
+				dimSpec = compute.DynamicDimensionSpec{Static: dim}
+			}
+
+			var cfg compute.DynamicPadAxis
+			if i < len(axesConfig) {
+				cfg = axesConfig[i]
+			}
+			hasAxisInt := cfg.InteriorValue != nil || (cfg.Interior > 0 && (dim == shapes.DynamicDim || dim > 1))
+			if !hasAxisInt {
+				expandedSpecs = append(expandedSpecs, dimSpec)
+				intPadsBefore = append(intPadsBefore, zeroInt64)
+				intPadsAfter = append(intPadsAfter, zeroInt64)
+				paddedExpandedDims = append(paddedExpandedDims, dim)
+				paddedExpandedNames = append(paddedExpandedNames, xNode.shape.AxisName(i))
+				mergedSpecs[i] = dimSpec
+				continue
+			}
+
+			var int64Val compute.Value
+			if cfg.InteriorValue != nil {
+				int64Val, err = f.ConvertDType(cfg.InteriorValue, dtypes.Int64)
+				if err != nil {
+					return nil, err
+				}
+				if int64Val.(*Node).shape.Rank() != 1 {
+					int64Val, err = f.Reshape(int64Val, 1)
+					if err != nil {
+						return nil, err
+					}
+				}
+			} else {
+				int64Val, err = f.Constant([]int64{int64(cfg.Interior)}, 1)
+				if err != nil {
+					return nil, err
+				}
+			}
+			interiorNodes[i] = int64Val
+
+			expandedSpecs = append(expandedSpecs, dimSpec, compute.DynamicDimensionSpec{Static: 1})
+			intPadsBefore = append(intPadsBefore, zeroInt64, zeroInt64)
+			intPadsAfter = append(intPadsAfter, zeroInt64, int64Val)
+			paddedExpandedDims = append(paddedExpandedDims, dim)
+			paddedExpandedNames = append(paddedExpandedNames, xNode.shape.AxisName(i))
+			if cfg.InteriorValue != nil {
+				paddedExpandedDims = append(paddedExpandedDims, shapes.DynamicDim)
+				paddedExpandedNames = append(paddedExpandedNames, shapes.AnonymousAxis)
+			} else {
+				paddedExpandedDims = append(paddedExpandedDims, 1+cfg.Interior)
+				paddedExpandedNames = append(paddedExpandedNames, "")
+			}
+
+			if dim != shapes.DynamicDim && cfg.InteriorValue == nil {
+				mergedSpecs[i] = compute.DynamicDimensionSpec{Static: dim * (1 + cfg.Interior)}
+			} else {
+				var dim1D compute.Value
+				if dimSpec.Value != nil {
+					dim1D, err = f.Reshape(dimSpec.Value, 1)
+				} else {
+					dim1D, err = f.Constant([]int64{int64(dim)}, 1)
+				}
+				if err != nil {
+					return nil, err
+				}
+				oneInt64, err := f.Constant([]int64{1}, 1)
+				if err != nil {
+					return nil, err
+				}
+				step1D, err := f.Add(oneInt64, int64Val)
+				if err != nil {
+					return nil, err
+				}
+				merged1D, err := f.Mul(dim1D, step1D)
+				if err != nil {
+					return nil, err
+				}
+				mergedScalar, err := f.Reshape(merged1D)
+				if err != nil {
+					return nil, err
+				}
+				axisName := xNode.shape.AxisName(i)
+				if axisName == "" {
+					axisName = shapes.AnonymousAxis
+				}
+				mergedSpecs[i] = compute.DynamicDimensionSpec{Name: axisName, Value: mergedScalar}
+			}
+		}
+
+		expandedVal, err := f.DynamicReshape(curr, expandedSpecs...)
+		if err != nil {
+			return nil, err
+		}
+
+		intAllPads := append(intPadsBefore, intPadsAfter...)
+		intPadsTensor, err := f.Concatenate(0, intAllPads...)
+		if err != nil {
+			return nil, errors.Wrap(err, "DynamicPad: concatenating interior pads failed")
+		}
+
+		paddedExpandedShape := shapes.MakeDynamic(curr.shape.DType, paddedExpandedDims, paddedExpandedNames)
+		intPadNode := f.addNode(&Node{
+			opType: "Pad",
+			inputs: []*Node{expandedVal.(*Node), intPadsTensor.(*Node), padScalar},
+			shape:  paddedExpandedShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "mode",
+					Type: onnx.AttributeProto_STRING,
+					S:    []byte("constant"),
+				},
+			},
+		})
+
+		mergedVal, err := f.DynamicReshape(intPadNode, mergedSpecs...)
+		if err != nil {
+			return nil, err
+		}
+		curr = mergedVal.(*Node)
+	}
+
+	padsBeforeList := make([]compute.Value, rank)
+	padsAfterList := make([]compute.Value, rank)
+
+	for i := range rank {
+		if i < len(axesConfig) {
+			cfg := axesConfig[i]
 
 			if cfg.StartValue != nil {
 				start64, err := f.ConvertDType(cfg.StartValue, dtypes.Int64)
@@ -1286,8 +1646,9 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 				padsBeforeList[i] = c
 			}
 
+			var end64 compute.Value
 			if cfg.EndValue != nil {
-				end64, err := f.ConvertDType(cfg.EndValue, dtypes.Int64)
+				end64, err = f.ConvertDType(cfg.EndValue, dtypes.Int64)
 				if err != nil {
 					return nil, err
 				}
@@ -1297,14 +1658,19 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 						return nil, err
 					}
 				}
-				padsAfterList[i] = end64
 			} else {
-				c, err := f.Constant([]int64{int64(cfg.End)}, 1)
+				end64, err = f.Constant([]int64{int64(cfg.End)}, 1)
 				if err != nil {
 					return nil, err
 				}
-				padsAfterList[i] = c
 			}
+			if interiorNodes[i] != nil {
+				end64, err = f.Sub(end64, interiorNodes[i])
+				if err != nil {
+					return nil, err
+				}
+			}
+			padsAfterList[i] = end64
 		} else {
 			padsBeforeList[i] = zeroInt64
 			padsAfterList[i] = zeroInt64
@@ -1317,21 +1683,9 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 		return nil, errors.Wrap(err, "DynamicPad: concatenating pads failed")
 	}
 
-	padScalar, ok := fillValue.(*Node)
-	if !ok {
-		return nil, errors.New("DynamicPad: fillValue must be a valid onnxruntime node")
-	}
-	if padScalar.shape.Rank() != 0 {
-		res, errReshape := f.Reshape(padScalar)
-		if errReshape != nil {
-			return nil, errReshape
-		}
-		padScalar = res.(*Node)
-	}
-
 	padNode := &Node{
 		opType: "Pad",
-		inputs: []*Node{xNode, padsTensor.(*Node), padScalar},
+		inputs: []*Node{curr, padsTensor.(*Node), padScalar},
 		shape:  outShape,
 		attributes: []*onnx.AttributeProto{
 			{

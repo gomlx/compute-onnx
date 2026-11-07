@@ -47,6 +47,7 @@ func init() {
 	registerOp(compute.OpTypeBitwiseOr)
 	registerOp(compute.OpTypeBitwiseXor)
 	registerOp(compute.OpTypeShiftLeft)
+	registerOp(compute.OpTypeShiftRightArithmetic)
 	registerOp(compute.OpTypeShiftRightLogical)
 
 	// Comparisons
