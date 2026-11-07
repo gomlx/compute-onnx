@@ -149,3 +149,52 @@ func (f *Function) ShiftLeft(lhs, rhs compute.Value) (compute.Value, error) {
 func (f *Function) ShiftRightLogical(lhs, rhs compute.Value) (compute.Value, error) {
 	return f.addBitShiftOp(compute.OpTypeShiftRightLogical, "RIGHT", lhs, rhs)
 }
+
+func (f *Function) ShiftRightArithmetic(lhs, rhs compute.Value) (compute.Value, error) {
+	lhsNode, ok1 := lhs.(*Node)
+	rhsNode, ok2 := rhs.(*Node)
+	if !ok1 || !ok2 {
+		return nil, errors.New("ShiftRightArithmetic: inputs must be valid onnxruntime nodes")
+	}
+	outShape, err := shapeinference.BinaryOp(compute.OpTypeShiftRightArithmetic, lhsNode.shape, rhsNode.shape)
+	if err != nil {
+		return nil, err
+	}
+
+	dtype := outShape.DType
+	if dtype.IsUnsigned() {
+		return f.addBitShiftOp(compute.OpTypeShiftRightArithmetic, "RIGHT", lhsNode, rhsNode)
+	}
+
+	// For signed integers in two's complement, ~x = -1 - x:
+	// ShiftRightArithmetic(x, s) = x < 0 ? ~((~x) >>_logical s) : (x >>_logical s)
+	zero, err := MakeScalar(f, 0, dtype)
+	if err != nil {
+		return nil, err
+	}
+	minusOne, err := MakeScalar(f, -1, dtype)
+	if err != nil {
+		return nil, err
+	}
+	isNeg, err := f.LessThan(lhsNode, zero)
+	if err != nil {
+		return nil, err
+	}
+	notLhs, err := f.Sub(minusOne, lhsNode)
+	if err != nil {
+		return nil, err
+	}
+	toShift, err := f.Where(isNeg, notLhs, lhsNode)
+	if err != nil {
+		return nil, err
+	}
+	shifted, err := f.addBitShiftOp(compute.OpTypeShiftRightArithmetic, "RIGHT", toShift, rhsNode)
+	if err != nil {
+		return nil, err
+	}
+	notShifted, err := f.Sub(minusOne, shifted)
+	if err != nil {
+		return nil, err
+	}
+	return f.Where(isNeg, notShifted, shifted)
+}
