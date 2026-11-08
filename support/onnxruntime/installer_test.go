@@ -26,6 +26,10 @@ func TestCleanCudaVersion(t *testing.T) {
 	}{
 		{"cuda12", "12"},
 		{"CUDA12", "12"},
+		{"cuda-12", "12"},
+		{"cuda-13", "13"},
+		{"cuda-13-3", "13"},
+		{"cuda_13.3", "13"},
 		{"v12", "12"},
 		{"12.4", "12"},
 		{"cuda12.4.131", "12"},
@@ -38,6 +42,36 @@ func TestCleanCudaVersion(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("cleanCudaVersion(%q) = %q; want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestCompareAndDetectCUDAVersions(t *testing.T) {
+	if compareCUDAVersions("13.3.29", "12.4.131") <= 0 {
+		t.Errorf("expected 13.3.29 > 12.4.131")
+	}
+	if compareCUDAVersions("13.3.29", "13") <= 0 {
+		t.Errorf("expected 13.3.29 > 13")
+	}
+	if compareCUDAVersions("13.3.29", "13.1.80") <= 0 {
+		t.Errorf("expected 13.3.29 > 13.1.80")
+	}
+
+	// Test cudaVersionFromInstallDir with both libcudart.so.13 and libcudart.so.13.3.29
+	tmpDir := t.TempDir()
+	cuda13Dir := filepath.Join(tmpDir, "cuda-13.3")
+	libDir := filepath.Join(cuda13Dir, "targets", "x86_64-linux", "lib")
+	if err := os.MkdirAll(libDir, 0755); err != nil {
+		t.Fatalf("failed to create libDir: %+v", err)
+	}
+	fullLib := filepath.Join(libDir, "libcudart.so.13.3.29")
+	if err := os.WriteFile(fullLib, []byte("dummy"), 0755); err != nil {
+		t.Fatalf("failed to write dummy libcudart: %+v", err)
+	}
+	_ = os.Symlink("libcudart.so.13.3.29", filepath.Join(libDir, "libcudart.so.13"))
+
+	gotVer := cudaVersionFromInstallDir(cuda13Dir)
+	if gotVer != "13.3.29" {
+		t.Errorf("cudaVersionFromInstallDir = %q; want \"13.3.29\"", gotVer)
 	}
 }
 
@@ -107,9 +141,33 @@ func TestGetLatestVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLatestVersion(true) failed: %+v", err)
 	}
-	t.Logf("GetLatestVersion(true) returned: %s", ver)
+	t.Logf("GetLatestVersion(true) returned: %s (CUDA full version: %s)", ver, GetCUDAFullVersion())
 	if isCUDAVersionLE12_4(GetCUDAFullVersion()) && ver != "1.27.0" {
 		t.Errorf("GetLatestVersion(true) = %q; want \"1.27.0\" on CUDA <= 12.4", ver)
+	}
+
+	// Forcing CUDA 12.4 should cap ORT version at 1.27.0.
+	ver12_4, err := getLatestVersionForCUDA(true, "12.4")
+	if err != nil {
+		t.Fatalf("getLatestVersionForCUDA(true, \"12.4\") failed: %+v", err)
+	}
+	if ver12_4 != "1.27.0" {
+		t.Errorf("getLatestVersionForCUDA(true, \"12.4\") = %q; want \"1.27.0\"", ver12_4)
+	}
+
+	// Forcing CUDA 13 (e.g. "13" or "cuda-13") must NOT downgrade to 1.27.0; it should fetch the latest ORT release.
+	latestCPU, err := GetLatestVersion(false)
+	if err != nil {
+		t.Fatalf("GetLatestVersion(false) failed: %+v", err)
+	}
+	for _, cuda13Arg := range []string{"13", "cuda13", "cuda-13", "cuda-13-3"} {
+		ver13, err := getLatestVersionForCUDA(true, cuda13Arg)
+		if err != nil {
+			t.Fatalf("getLatestVersionForCUDA(true, %q) failed: %+v", cuda13Arg, err)
+		}
+		if ver13 != latestCPU {
+			t.Errorf("getLatestVersionForCUDA(true, %q) = %q; want latest %q", cuda13Arg, ver13, latestCPU)
+		}
 	}
 }
 

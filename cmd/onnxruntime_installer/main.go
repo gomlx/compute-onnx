@@ -34,6 +34,7 @@ func main() {
 	}
 
 	force := *flagForce
+	cuda := *flagCuda || (*flagCudaVersion != "")
 	if *flagVersion != "" {
 		installedVersion, err := onnxruntime.GetInstalledVersion(*flagTarget)
 		if err != nil {
@@ -47,7 +48,7 @@ func main() {
 		}
 	}
 
-	libPath, err := onnxruntime.Install(*flagVersion, *flagCuda, *flagCudaVersion, *flagTarget, force)
+	libPath, err := onnxruntime.Install(*flagVersion, cuda, *flagCudaVersion, *flagTarget, force)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error installing ONNX Runtime: %+v\n", err)
 		os.Exit(1)
