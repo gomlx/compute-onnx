@@ -157,77 +157,28 @@ func parseVersionFromLibName(base string) string {
 }
 
 // GetDefaultCUDAVersion attempts to guess the CUDA version based on installed libraries found on standard paths,
-// or via nvcc if available. It returns the major version as a string (e.g., "12"). If nothing is found, it defaults to "12".
+// or via nvcc if available. It returns the major version as a string (e.g., "12", "13"). If nothing is found, it defaults to "12".
 func GetDefaultCUDAVersion() string {
-	// 1. Try nvcc executable
-	if nvccPath, err := exec.LookPath("nvcc"); err == nil && nvccPath != "" {
-		cmd := exec.Command(nvccPath, "--version")
-		if out, err := cmd.Output(); err == nil {
-			if ver := parseCudaVersionFromOutput(string(out)); ver != "" {
-				return ver
-			}
+	if fullVer := GetCUDAFullVersion(); fullVer != "" {
+		if major := cleanCudaVersion(fullVer); major != "" {
+			return major
 		}
 	}
-
-	// 2. Check CUDA environment variables
-	for _, envVar := range []string{"CUDA_PATH", "CUDA_HOME"} {
-		if val := os.Getenv(envVar); val != "" {
-			if ver := parseCudaVersionFromOutput(val); ver != "" {
-				return ver
-			}
-		}
-	}
-
-	// 3. Search system library paths for libcudart.so.* or cudart64_*.dll
-	searchPaths := []string{
-		"/usr/lib/x86_64-linux-gnu",
-		"/usr/local/cuda/lib64",
-		"/usr/local/cuda/lib",
-		"/usr/local/lib",
-		"/usr/lib",
-		"/usr/lib64",
-	}
-	if ldPath := os.Getenv("LD_LIBRARY_PATH"); ldPath != "" {
-		searchPaths = append(strings.Split(ldPath, string(os.PathListSeparator)), searchPaths...)
-	}
-
-	for _, p := range searchPaths {
-		if p == "" {
-			continue
-		}
-		// Linux: libcudart.so.<version>
-		if matches, err := filepath.Glob(filepath.Join(p, "libcudart.so.*")); err == nil && len(matches) > 0 {
-			for _, m := range matches {
-				base := filepath.Base(m)
-				parts := strings.Split(base, "libcudart.so.")
-				if len(parts) == 2 && parts[1] != "" {
-					verParts := strings.Split(parts[1], ".")
-					if len(verParts) > 0 && verParts[0] != "" {
-						return verParts[0]
-					}
-				}
-			}
-		}
-		// Windows: cudart64_<version>.dll or cudart64_12.dll
-		if matches, err := filepath.Glob(filepath.Join(p, "cudart64_*.dll")); err == nil && len(matches) > 0 {
-			for _, m := range matches {
-				base := filepath.Base(m)
-				base = strings.TrimPrefix(base, "cudart64_")
-				base = strings.TrimSuffix(base, ".dll")
-				if len(base) >= 2 {
-					return base[:2]
-				}
-			}
-		}
-	}
-
 	return "12"
 }
 
-func cleanCudaVersion(v string) string {
+func normalizeCudaVersionString(v string) string {
 	v = strings.ToLower(strings.TrimSpace(v))
 	v = strings.TrimPrefix(v, "cuda")
 	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimLeft(v, "-_ ")
+	v = strings.ReplaceAll(v, "-", ".")
+	v = strings.ReplaceAll(v, "_", ".")
+	return v
+}
+
+func cleanCudaVersion(v string) string {
+	v = normalizeCudaVersionString(v)
 	parts := strings.Split(v, ".")
 	if len(parts) > 0 {
 		return parts[0]
@@ -235,39 +186,77 @@ func cleanCudaVersion(v string) string {
 	return v
 }
 
+func parseCUDAVersionComponents(v string) (major, minor, patch, specificity int, ok bool) {
+	v = normalizeCudaVersionString(v)
+	if v == "" {
+		return 0, 0, 0, 0, false
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return 0, 0, 0, 0, false
+	}
+	maj, err := strconv.Atoi(parts[0])
+	if err != nil || maj <= 0 || maj > 100 {
+		return 0, 0, 0, 0, false
+	}
+	major = maj
+	specificity = 1
+	if len(parts) > 1 && parts[1] != "" {
+		if min, err := strconv.Atoi(parts[1]); err == nil && min >= 0 {
+			minor = min
+			specificity = 2
+			if len(parts) > 2 && parts[2] != "" {
+				if pat, err := strconv.Atoi(parts[2]); err == nil && pat >= 0 {
+					patch = pat
+					specificity = 3
+				}
+			}
+		}
+	}
+	return major, minor, patch, specificity, true
+}
+
+func compareCUDAVersions(a, b string) int {
+	majA, minA, patA, specA, okA := parseCUDAVersionComponents(a)
+	majB, minB, patB, specB, okB := parseCUDAVersionComponents(b)
+	if !okA && !okB {
+		return 0
+	}
+	if !okA {
+		return -1
+	}
+	if !okB {
+		return 1
+	}
+	if majA != majB {
+		if majA > majB {
+			return 1
+		}
+		return -1
+	}
+	if minA != minB {
+		if minA > minB {
+			return 1
+		}
+		return -1
+	}
+	if patA != patB {
+		if patA > patB {
+			return 1
+		}
+		return -1
+	}
+	if specA != specB {
+		if specA > specB {
+			return 1
+		}
+		return -1
+	}
+	return 0
+}
+
 func parseCudaVersionFromOutput(s string) string {
-	lines := strings.Split(s, "\n")
-	for _, line := range lines {
-		if idx := strings.Index(line, "release "); idx != -1 {
-			sub := line[idx+len("release "):]
-			parts := strings.Split(sub, ".")
-			if len(parts) > 0 && parts[0] != "" {
-				if _, err := strconv.Atoi(parts[0]); err == nil {
-					return parts[0]
-				}
-			}
-		}
-		words := strings.Fields(line)
-		for _, w := range words {
-			w = strings.TrimSuffix(w, ",")
-			if strings.HasPrefix(w, "V") && len(w) > 1 && unicode.IsDigit(rune(w[1])) {
-				vStr := w[1:]
-				parts := strings.Split(vStr, ".")
-				if len(parts) > 0 && parts[0] != "" {
-					if _, err := strconv.Atoi(parts[0]); err == nil {
-						return parts[0]
-					}
-				}
-			}
-		}
-	}
-	sub := strings.ToLower(s)
-	for _, ver := range []string{"13", "12", "11"} {
-		if strings.Contains(sub, "v"+ver) || strings.Contains(sub, "cuda-"+ver) || strings.Contains(sub, "cuda"+ver) {
-			return ver
-		}
-	}
-	return ""
+	return cleanCudaVersion(parseCUDAFullVersionFromOutput(s))
 }
 
 type githubRelease struct {
@@ -462,106 +451,251 @@ func GetAssetURL(version string, cuda bool, cudaVersion string) (string, error) 
 	return url, nil
 }
 
-// GetCUDAFullVersion attempts to return the full CUDA version string (e.g. "12.4" or "12.4.131") found on the system.
-func GetCUDAFullVersion() string {
-	// 1. Try nvcc executable
-	if nvccPath, err := exec.LookPath("nvcc"); err == nil && nvccPath != "" {
-		cmd := exec.Command(nvccPath, "--version")
-		if out, err := cmd.Output(); err == nil {
-			if ver := parseCUDAFullVersionFromOutput(string(out)); ver != "" {
-				return ver
+func cudaVersionFromLibFile(filePath string) string {
+	bestVer := ""
+	updateBest := func(candidate string) {
+		if _, _, _, _, ok := parseCUDAVersionComponents(candidate); ok {
+			if compareCUDAVersions(candidate, bestVer) > 0 {
+				bestVer = candidate
 			}
 		}
 	}
 
-	// 2. Check CUDA environment variables
-	for _, envVar := range []string{"CUDA_PATH", "CUDA_HOME"} {
+	checkBase := func(base string) {
+		if parts := strings.Split(base, "libcudart.so."); len(parts) == 2 && parts[1] != "" {
+			updateBest(parts[1])
+		} else if strings.HasPrefix(base, "cudart64_") && strings.HasSuffix(base, ".dll") {
+			ver := strings.TrimPrefix(base, "cudart64_")
+			ver = strings.TrimSuffix(ver, ".dll")
+			if len(ver) >= 2 {
+				updateBest(ver[:2])
+			}
+		}
+	}
+
+	checkBase(filepath.Base(filePath))
+	if resolved, err := filepath.EvalSymlinks(filePath); err == nil {
+		checkBase(filepath.Base(resolved))
+	}
+	return bestVer
+}
+
+func cudaVersionFromLibDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	bestVer := ""
+	updateBest := func(candidate string) {
+		if candidate != "" && compareCUDAVersions(candidate, bestVer) > 0 {
+			bestVer = candidate
+		}
+	}
+
+	if matches, err := filepath.Glob(filepath.Join(dir, "libcudart.so.*")); err == nil {
+		for _, m := range matches {
+			updateBest(cudaVersionFromLibFile(m))
+		}
+	}
+	if matches, err := filepath.Glob(filepath.Join(dir, "cudart64_*.dll")); err == nil {
+		for _, m := range matches {
+			updateBest(cudaVersionFromLibFile(m))
+		}
+	}
+	return bestVer
+}
+
+func cudaVersionFromInstallDir(cudaDir string) string {
+	if cudaDir == "" {
+		return ""
+	}
+	if _, err := os.Stat(cudaDir); err != nil {
+		return ""
+	}
+
+	bestVer := ""
+	updateBest := func(candidate string) {
+		if candidate != "" && compareCUDAVersions(candidate, bestVer) > 0 {
+			bestVer = candidate
+		}
+	}
+
+	// 1. Check runtime libraries inside the CUDA directory.
+	libSubdirs := []string{
+		"lib64",
+		filepath.Join("targets", "x86_64-linux", "lib"),
+		filepath.Join("targets", "sbsa-linux", "lib"),
+		filepath.Join("targets", "aarch64-linux", "lib"),
+		"lib",
+		"bin",
+		".",
+	}
+	for _, sub := range libSubdirs {
+		updateBest(cudaVersionFromLibDir(filepath.Join(cudaDir, sub)))
+	}
+
+	// 2. Check nvcc inside bin/.
+	for _, nvccName := range []string{"nvcc", "nvcc.exe"} {
+		nvccPath := filepath.Join(cudaDir, "bin", nvccName)
+		if info, err := os.Stat(nvccPath); err == nil && !info.IsDir() {
+			if out, err := exec.Command(nvccPath, "--version").Output(); err == nil {
+				updateBest(parseCUDAFullVersionFromOutput(string(out)))
+			}
+		}
+	}
+
+	// 3. Check directory name and resolved symlink target.
+	updateBest(parseCUDAFullVersionFromOutput(cudaDir))
+	if resolved, err := filepath.EvalSymlinks(cudaDir); err == nil {
+		updateBest(parseCUDAFullVersionFromOutput(resolved))
+	}
+
+	return bestVer
+}
+
+// GetCUDAFullVersion attempts to return the full CUDA version string (e.g. "13.3.29", "12.4", or "12.4.131") found on the system.
+func GetCUDAFullVersion() string {
+	// 1. Check explicit CUDA environment variables first (highest priority user override).
+	for _, envVar := range []string{"CUDA_PATH", "CUDA_HOME", "CUDA_ROOT"} {
 		if val := os.Getenv(envVar); val != "" {
+			if ver := cudaVersionFromInstallDir(val); ver != "" {
+				return ver
+			}
 			if ver := parseCUDAFullVersionFromOutput(val); ver != "" {
 				return ver
 			}
 		}
 	}
 
-	// 3. Search system library paths for libcudart.so.*
-	searchPaths := []string{
-		"/usr/lib/x86_64-linux-gnu",
-		"/usr/local/cuda/lib64",
-		"/usr/local/cuda/lib",
-		"/usr/local/lib",
-		"/usr/lib",
-		"/usr/lib64",
-	}
+	// 2. Check LD_LIBRARY_PATH if explicitly set.
 	if ldPath := os.Getenv("LD_LIBRARY_PATH"); ldPath != "" {
-		searchPaths = append(strings.Split(ldPath, string(os.PathListSeparator)), searchPaths...)
+		bestLDVer := ""
+		for _, p := range filepath.SplitList(ldPath) {
+			if ver := cudaVersionFromLibDir(p); ver != "" && compareCUDAVersions(ver, bestLDVer) > 0 {
+				bestLDVer = ver
+			}
+		}
+		if bestLDVer != "" {
+			return bestLDVer
+		}
 	}
 
-	for _, p := range searchPaths {
-		if p == "" {
-			continue
+	// 3. Discover all system CUDA installations and select the highest installed version.
+	bestVer := ""
+	updateBest := func(candidate string) {
+		if candidate != "" && compareCUDAVersions(candidate, bestVer) > 0 {
+			bestVer = candidate
 		}
-		if matches, err := filepath.Glob(filepath.Join(p, "libcudart.so.*")); err == nil && len(matches) > 0 {
-			for _, m := range matches {
-				base := filepath.Base(m)
-				parts := strings.Split(base, "libcudart.so.")
-				if len(parts) == 2 && parts[1] != "" {
-					return parts[1]
+	}
+
+	// 3a. Standard /usr/local/cuda and /usr/local/cuda-* installations.
+	updateBest(cudaVersionFromInstallDir("/usr/local/cuda"))
+	if matches, err := filepath.Glob("/usr/local/cuda-*"); err == nil {
+		for _, m := range matches {
+			updateBest(cudaVersionFromInstallDir(m))
+		}
+	}
+
+	// 3b. Dynamic linker cache (ldconfig -p) on Linux.
+	if ldconfigPath, err := exec.LookPath("ldconfig"); err == nil && ldconfigPath != "" {
+		if out, err := exec.Command(ldconfigPath, "-p").Output(); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if idx := strings.LastIndex(line, "=> "); idx != -1 {
+					libPath := strings.TrimSpace(line[idx+3:])
+					if strings.HasPrefix(filepath.Base(libPath), "libcudart.so") {
+						updateBest(cudaVersionFromLibFile(libPath))
+						updateBest(cudaVersionFromLibDir(filepath.Dir(libPath)))
+					}
 				}
 			}
 		}
 	}
 
-	return GetDefaultCUDAVersion()
+	// 3c. nvcc in PATH.
+	if nvccPath, err := exec.LookPath("nvcc"); err == nil && nvccPath != "" {
+		if out, err := exec.Command(nvccPath, "--version").Output(); err == nil {
+			updateBest(parseCUDAFullVersionFromOutput(string(out)))
+		}
+	}
+
+	// 3d. Standard system library directories.
+	systemLibDirs := []string{
+		"/usr/local/lib",
+		"/usr/lib/x86_64-linux-gnu",
+		"/usr/lib/aarch64-linux-gnu",
+		"/usr/lib64",
+		"/usr/lib",
+	}
+	for _, p := range systemLibDirs {
+		updateBest(cudaVersionFromLibDir(p))
+	}
+
+	if bestVer != "" {
+		return bestVer
+	}
+	return "12"
 }
 
 func parseCUDAFullVersionFromOutput(s string) string {
 	lines := strings.Split(s, "\n")
 	for _, line := range lines {
+		// Prefer V<major>.<minor>.<patch> on the "release X.Y, VX.Y.Z" line if present.
+		words := strings.Fields(line)
+		for _, w := range words {
+			w = strings.TrimSuffix(w, ",")
+			if strings.HasPrefix(w, "V") && len(w) > 1 && unicode.IsDigit(rune(w[1])) {
+				ver := w[1:]
+				if _, _, _, _, ok := parseCUDAVersionComponents(ver); ok {
+					return ver
+				}
+			}
+		}
 		if idx := strings.Index(line, "release "); idx != -1 {
 			sub := line[idx+len("release "):]
 			parts := strings.Split(sub, ",")
 			if len(parts) > 0 {
 				ver := strings.TrimSpace(parts[0])
-				if ver != "" {
+				if _, _, _, _, ok := parseCUDAVersionComponents(ver); ok {
 					return ver
 				}
 			}
 		}
-		words := strings.Fields(line)
-		for _, w := range words {
-			w = strings.TrimSuffix(w, ",")
-			if strings.HasPrefix(w, "V") && len(w) > 1 && unicode.IsDigit(rune(w[1])) {
-				return w[1:]
+	}
+
+	// Scan for cuda-<ver>, cuda_<ver>, cuda<ver>, or v<ver> in paths or strings.
+	sub := strings.ToLower(s)
+	bestVer := ""
+	for _, prefix := range []string{"cuda-", "cuda_", "cuda", "v"} {
+		search := sub
+		for {
+			idx := strings.Index(search, prefix)
+			if idx == -1 {
+				break
+			}
+			rest := search[idx+len(prefix):]
+			search = rest
+			if len(rest) == 0 || !unicode.IsDigit(rune(rest[0])) {
+				continue
+			}
+			end := 0
+			for end < len(rest) && (unicode.IsDigit(rune(rest[end])) || rest[end] == '.' || rest[end] == '-') {
+				end++
+			}
+			candidate := strings.TrimRight(rest[:end], ".-")
+			candidate = strings.ReplaceAll(candidate, "-", ".")
+			if _, _, _, _, ok := parseCUDAVersionComponents(candidate); ok {
+				if compareCUDAVersions(candidate, bestVer) > 0 {
+					bestVer = candidate
+				}
 			}
 		}
 	}
-	sub := strings.ToLower(s)
-	for _, ver := range []string{"13", "12.4", "12.3", "12.2", "12.1", "12.0", "12", "11.8", "11"} {
-		if strings.Contains(sub, "v"+ver) || strings.Contains(sub, "cuda-"+ver) || strings.Contains(sub, "cuda"+ver) {
-			return ver
-		}
-	}
-	return ""
+	return bestVer
 }
 
 func parseMajorMinor(v string) (int, int, error) {
-	v = strings.ToLower(strings.TrimSpace(v))
-	v = strings.TrimPrefix(v, "cuda")
-	v = strings.TrimPrefix(v, "v")
-	parts := strings.Split(v, ".")
-	if len(parts) == 0 || parts[0] == "" {
-		return 0, 0, errors.New("empty version")
-	}
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, err
-	}
-	minor := 0
-	if len(parts) > 1 && parts[1] != "" {
-		m, err := strconv.Atoi(parts[1])
-		if err == nil {
-			minor = m
-		}
+	major, minor, _, _, ok := parseCUDAVersionComponents(v)
+	if !ok {
+		return 0, 0, errors.Errorf("invalid CUDA version %q", v)
 	}
 	return major, minor, nil
 }
@@ -586,35 +720,44 @@ func GetLatestVersion(cuda bool) (string, error) {
 	if cuda {
 		cudaVer := GetCUDAFullVersion()
 		if isCUDAVersionLE12_4(cudaVer) {
-			klog.Infof("Current CUDA installed is %s (<= 12.4) and it is only supported for up to version v1.27 of ONNX Runtime", cudaVer)
+			klog.Infof("Current CUDA version %s (<= 12.4) is only supported for up to version v1.27 of ONNX Runtime", cudaVer)
 			return "1.27.0", nil
 		}
 	}
 
-	resp, err := http.Head("https://github.com/microsoft/onnxruntime/releases/latest")
+	// 1. Check the 302 redirect Location header of /releases/latest without following the redirect
+	// to the heavy HTML tag page (which can time out with 504 on HEAD requests).
+	noRedirectClient := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := noRedirectClient.Head("https://github.com/microsoft/onnxruntime/releases/latest")
+	if err == nil {
+		resp.Body.Close()
+		if loc := resp.Header.Get("Location"); loc != "" {
+			if parts := strings.Split(loc, "/tag/"); len(parts) == 2 {
+				return strings.TrimPrefix(strings.TrimSpace(parts[1]), "v"), nil
+			}
+		}
+	}
+
+	// 2. Fallback to the GitHub Releases REST API.
+	apiResp, apiErr := http.Get("https://api.github.com/repos/microsoft/onnxruntime/releases/latest")
+	if apiErr == nil {
+		defer apiResp.Body.Close()
+		if apiResp.StatusCode == http.StatusOK {
+			var rel githubRelease
+			if decErr := json.NewDecoder(apiResp.Body).Decode(&rel); decErr == nil && rel.TagName != "" {
+				return strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v"), nil
+			}
+		}
+	}
+
 	if err != nil {
 		return "", errors.Wrap(err, "failed to fetch latest onnxruntime release from GitHub")
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return "", errors.Errorf("failed to fetch latest onnxruntime release from GitHub: status code %d", resp.StatusCode)
-	}
-
-	if resp.Request == nil {
-		return "", errors.New("failed to fetch latest onnxruntime release: response Request is nil")
-	}
-
-	finalURL := resp.Request.URL.String()
-	// The URL is expected to be of the form: https://github.com/microsoft/onnxruntime/releases/tag/vX.Y.Z
-	// We want to extract "X.Y.Z"
-	parts := strings.Split(finalURL, "/tag/")
-	if len(parts) != 2 {
-		return "", errors.Errorf("unexpected redirect URL when fetching latest release: %s", finalURL)
-	}
-
-	version := strings.TrimPrefix(parts[1], "v")
-	return version, nil
+	return "", errors.Errorf("failed to fetch latest onnxruntime release from GitHub: status code %d", resp.StatusCode)
 }
 
 // Install downloads and installs the ONNX Runtime library if not already present.
