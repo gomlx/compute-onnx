@@ -145,6 +145,30 @@ func TestGetLatestVersion(t *testing.T) {
 	if isCUDAVersionLE12_4(GetCUDAFullVersion()) && ver != "1.27.0" {
 		t.Errorf("GetLatestVersion(true) = %q; want \"1.27.0\" on CUDA <= 12.4", ver)
 	}
+
+	// Forcing CUDA 12.4 should cap ORT version at 1.27.0.
+	ver12_4, err := getLatestVersionForCUDA(true, "12.4")
+	if err != nil {
+		t.Fatalf("getLatestVersionForCUDA(true, \"12.4\") failed: %+v", err)
+	}
+	if ver12_4 != "1.27.0" {
+		t.Errorf("getLatestVersionForCUDA(true, \"12.4\") = %q; want \"1.27.0\"", ver12_4)
+	}
+
+	// Forcing CUDA 13 (e.g. "13" or "cuda-13") must NOT downgrade to 1.27.0; it should fetch the latest ORT release.
+	latestCPU, err := GetLatestVersion(false)
+	if err != nil {
+		t.Fatalf("GetLatestVersion(false) failed: %+v", err)
+	}
+	for _, cuda13Arg := range []string{"13", "cuda13", "cuda-13", "cuda-13-3"} {
+		ver13, err := getLatestVersionForCUDA(true, cuda13Arg)
+		if err != nil {
+			t.Fatalf("getLatestVersionForCUDA(true, %q) failed: %+v", cuda13Arg, err)
+		}
+		if ver13 != latestCPU {
+			t.Errorf("getLatestVersionForCUDA(true, %q) = %q; want latest %q", cuda13Arg, ver13, latestCPU)
+		}
+	}
 }
 
 func TestNormalizeVersion(t *testing.T) {

@@ -717,8 +717,15 @@ func isCUDAVersionLE12_4(v string) bool {
 // GetLatestVersion fetches the latest release version of ONNX Runtime from GitHub.
 // If cuda is true and the installed CUDA version is <= 12.4, it returns "1.27.0" to maintain compatibility.
 func GetLatestVersion(cuda bool) (string, error) {
+	return getLatestVersionForCUDA(cuda, "")
+}
+
+func getLatestVersionForCUDA(cuda bool, cudaVersion string) (string, error) {
 	if cuda {
-		cudaVer := GetCUDAFullVersion()
+		cudaVer := strings.TrimSpace(cudaVersion)
+		if cudaVer == "" {
+			cudaVer = GetCUDAFullVersion()
+		}
 		if isCUDAVersionLE12_4(cudaVer) {
 			klog.Infof("Current CUDA version %s (<= 12.4) is only supported for up to version v1.27 of ONNX Runtime", cudaVer)
 			return "1.27.0", nil
@@ -763,14 +770,16 @@ func GetLatestVersion(cuda bool) (string, error) {
 // Install downloads and installs the ONNX Runtime library if not already present.
 // It returns the absolute path to the main shared library file.
 func Install(version string, cuda bool, cudaVersion string, targetDir string, force bool) (string, error) {
-	specifiedVersion := (version != "")
+	if cudaVersion != "" {
+		cuda = true
+	}
 	version = NormalizeVersion(version)
 	if version == "" {
 		version = DefaultVersion
 	}
 	if version == "" {
 		var err error
-		version, err = GetLatestVersion(cuda)
+		version, err = getLatestVersionForCUDA(cuda, cudaVersion)
 		if err != nil {
 			return "", err
 		}
@@ -795,10 +804,8 @@ func Install(version string, cuda bool, cudaVersion string, targetDir string, fo
 	targetPath := filepath.Join(installDir, libFilename)
 	if !force {
 		if _, err := os.Stat(targetPath); err == nil {
-			if specifiedVersion {
-				if installedVersion, _ := GetInstalledVersion(installDir); installedVersion != "" && installedVersion != version {
-					force = true
-				}
+			if installedVersion, _ := GetInstalledVersion(installDir); installedVersion != "" && installedVersion != version {
+				force = true
 			}
 			if !force {
 				if !cuda {
