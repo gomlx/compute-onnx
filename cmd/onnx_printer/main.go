@@ -275,7 +275,7 @@ func printNode(w io.Writer, n *protos.NodeProto, index int, indent string, shape
 	if len(n.GetAttribute()) > 0 {
 		attrParts := make([]string, len(n.GetAttribute()))
 		for i, attr := range n.GetAttribute() {
-			attrParts[i] = formatAttribute(attr, maxItems)
+			attrParts[i] = formatAttribute(n.GetOpType(), attr, maxItems)
 		}
 		attrStr = " {" + strings.Join(attrParts, ", ") + "}"
 	}
@@ -407,9 +407,32 @@ func DTypeFromONNX(dt protos.TensorProto_DataType) dtypes.DType {
 		return dtypes.Uint32
 	case protos.TensorProto_UINT64:
 		return dtypes.Uint64
+	case protos.TensorProto_COMPLEX64:
+		return dtypes.Complex64
+	case protos.TensorProto_COMPLEX128:
+		return dtypes.Complex128
+	case protos.TensorProto_INT4:
+		return dtypes.Int4
+	case protos.TensorProto_UINT4:
+		return dtypes.Uint4
+	case protos.TensorProto_INT2:
+		return dtypes.Int2
+	case protos.TensorProto_UINT2:
+		return dtypes.Uint2
 	default:
 		return dtypes.InvalidDType
 	}
+}
+
+func formatONNXDataType(val int64) string {
+	onnxDT := protos.TensorProto_DataType(val)
+	if dt := DTypeFromONNX(onnxDT); dt != dtypes.InvalidDType {
+		return dt.String()
+	}
+	if name, ok := protos.TensorProto_DataType_name[int32(val)]; ok {
+		return name
+	}
+	return fmt.Sprintf("%d", val)
 }
 
 // ShapeFromTensorProto converts an ONNX TensorProto into a GoMLX shapes.Shape.
@@ -518,15 +541,19 @@ func sliceToStrings(sliceAny any, maxItems int) []string {
 	return res
 }
 
-func formatAttribute(attr *protos.AttributeProto, maxItems int) string {
+func formatAttribute(opType string, attr *protos.AttributeProto, maxItems int) string {
 	if attr == nil {
 		return ""
 	}
 	name := attr.GetName()
+	isDTypeAttr := name == "dtype" || ((opType == "Cast" || opType == "BitCast") && name == "to")
 	switch attr.GetType() {
 	case protos.AttributeProto_FLOAT:
 		return fmt.Sprintf("%s: %g", name, attr.GetF())
 	case protos.AttributeProto_INT:
+		if isDTypeAttr {
+			return fmt.Sprintf("%s: %s", name, formatONNXDataType(attr.GetI()))
+		}
 		return fmt.Sprintf("%s: %d", name, attr.GetI())
 	case protos.AttributeProto_STRING:
 		return fmt.Sprintf("%s: %q", name, string(attr.GetS()))
@@ -573,6 +600,9 @@ func formatAttribute(attr *protos.AttributeProto, maxItems int) string {
 			return fmt.Sprintf("%s: %g", name, attr.GetF())
 		}
 		if attr.GetI() != 0 {
+			if isDTypeAttr {
+				return fmt.Sprintf("%s: %s", name, formatONNXDataType(attr.GetI()))
+			}
 			return fmt.Sprintf("%s: %d", name, attr.GetI())
 		}
 		if len(attr.GetS()) > 0 {

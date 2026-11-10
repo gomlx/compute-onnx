@@ -57,7 +57,13 @@ func TestPrintModel(t *testing.T) {
 		t.Fatalf("Failed to create Add node: %+v", err)
 	}
 
-	fn.Return([]compute.Value{addNode, c, dynParam}, nil)
+	// Cast node (ConvertDType)
+	castNode, err := fn.ConvertDType(addNode, dtypes.Int32)
+	if err != nil {
+		t.Fatalf("Failed to create ConvertDType node: %+v", err)
+	}
+
+	fn.Return([]compute.Value{addNode, castNode, c, dynParam}, nil)
 
 	exec, err := builder.Compile()
 	if err != nil {
@@ -91,6 +97,9 @@ func TestPrintModel(t *testing.T) {
 	}
 	if !strings.Contains(outStr, "[0] node_2: Add(x:(Float32)[2, 3], x:(Float32)[2, 3]) : (Float32)[2, 3]") {
 		t.Errorf("Expected single line op formatting in output, got:\n%s", outStr)
+	}
+	if !strings.Contains(outStr, "Cast(node_2:(Float32)[2, 3]) {to: Int32} : (Int32)[2, 3]") {
+		t.Errorf("Expected Cast node with {to: Int32} in output, got:\n%s", outStr)
 	}
 
 	// Initializer constant with 15 elements truncated at 10 items
