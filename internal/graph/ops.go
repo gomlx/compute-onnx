@@ -65,6 +65,7 @@ func init() {
 	registerOp(compute.OpTypeFloor)
 	registerOp(compute.OpTypeRound)
 	registerOp(compute.OpTypeSqrt)
+	registerOp(compute.OpTypeRsqrt)
 	registerOp(compute.OpTypeExp)
 	registerOp(compute.OpTypeLog)
 	registerOp(compute.OpTypeCos)
