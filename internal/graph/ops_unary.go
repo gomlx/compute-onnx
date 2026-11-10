@@ -43,6 +43,23 @@ func (f *Function) Sqrt(x compute.Value) (compute.Value, error) {
 	return f.addUnaryOp(compute.OpTypeSqrt, "Sqrt", x)
 }
 
+func (f *Function) Rsqrt(x compute.Value) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("input must be a valid onnxruntime node")
+	}
+
+	sqrtX, err := f.Sqrt(xNode)
+	if err != nil {
+		return nil, err
+	}
+	one, err := MakeScalar(f, 1, xNode.shape.DType)
+	if err != nil {
+		return nil, err
+	}
+	return f.Div(one, sqrtX)
+}
+
 func (f *Function) Exp(x compute.Value) (compute.Value, error) {
 	return f.addUnaryOp(compute.OpTypeExp, "Exp", x)
 }

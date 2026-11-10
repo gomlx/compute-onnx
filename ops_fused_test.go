@@ -270,6 +270,25 @@ func TestTrigOps(t *testing.T) {
 	}
 }
 
+func TestRsqrt(t *testing.T) {
+	b, err := New("cpu")
+	if err != nil {
+		t.Fatalf("Failed to create backend: %+v", err)
+	}
+	defer b.Finalize()
+
+	got, err := testutil.Exec1(b, []any{[]float32{1, 4, 0.25}}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+		return f.Rsqrt(params[0])
+	})
+	if err != nil {
+		t.Fatalf("Rsqrt failed: %+v", err)
+	}
+	want := []float32{1, 0.5, 2}
+	if ok, diff := testutil.IsInDelta(want, got, 1e-6); !ok {
+		t.Errorf("Mismatch:\n%s", diff)
+	}
+}
+
 func TestRNGBitGenerator(t *testing.T) {
 	b, err := New("cpu")
 	if err != nil {
