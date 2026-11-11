@@ -60,6 +60,19 @@ func (f *Function) Min(lhs, rhs compute.Value) (compute.Value, error) {
 	return f.addBinaryOp(compute.OpTypeMin, "Min", lhs, rhs)
 }
 
+// Clamp supports both scalar and elementwise bounds using ONNX Max and Min.
+func (f *Function) Clamp(min, x, max compute.Value) (compute.Value, error) {
+	clamped, err := f.Max(min, x)
+	if err != nil {
+		return nil, errors.WithMessage(err, "Clamp lower bound")
+	}
+	clamped, err = f.Min(clamped, max)
+	if err != nil {
+		return nil, errors.WithMessage(err, "Clamp upper bound")
+	}
+	return clamped, nil
+}
+
 func (f *Function) Pow(lhs, rhs compute.Value) (compute.Value, error) {
 	return f.addBinaryOp(compute.OpTypePow, "Pow", lhs, rhs)
 }
