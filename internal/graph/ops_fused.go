@@ -927,65 +927,172 @@ func (f *Function) QuantizedEmbeddingLookup(data, indices compute.Value, dataQua
 	return nil, errors.Wrap(compute.ErrNotImplemented, "QuantizedEmbeddingLookup is not implemented for onnxruntime backend")
 }
 
+func quantizationToShapes(opName string, q *compute.Quantization) (*shapeinference.QuantizationShapes, *Node, *Node, error) {
+	if q == nil {
+		return nil, nil, nil, nil
+	}
+	qs := &shapeinference.QuantizationShapes{
+		Scheme:         q.Scheme,
+		Scale:          shapes.Invalid(),
+		ZeroPoint:      shapes.Invalid(),
+		BlockAxis:      q.BlockAxis,
+		BlockSize:      q.BlockSize,
+		GGMLType:       q.GGMLType,
+		QuantizedDType: q.QuantizedDType,
+	}
+	var scaleNode, zpNode *Node
+	if q.Scale != nil {
+		var ok bool
+		scaleNode, ok = q.Scale.(*Node)
+		if !ok {
+			return nil, nil, nil, errors.Errorf("%s: quantization Scale must be a valid onnxruntime node", opName)
+		}
+		qs.Scale = scaleNode.shape
+	}
+	if q.ZeroPoint != nil {
+		var ok bool
+		zpNode, ok = q.ZeroPoint.(*Node)
+		if !ok {
+			return nil, nil, nil, errors.Errorf("%s: quantization ZeroPoint must be a valid onnxruntime node", opName)
+		}
+		qs.ZeroPoint = zpNode.shape
+	}
+	return qs, scaleNode, zpNode, nil
+}
+
+func expandWeightQuantParam(f *Function, param *Node, layout shapeinference.BlockParamLayout, d0, d1 int) (compute.Value, error) {
+	paramFloat, err := f.ConvertDType(param, dtypes.Float32)
+	if err != nil {
+		return nil, err
+	}
+	pNode := paramFloat.(*Node)
+	if pNode.shape.Rank() == 2 && pNode.shape.Dimensions[0] == d0 && pNode.shape.Dimensions[1] == d1 {
+		return paramFloat, nil
+	}
+	numRowBlocks := (d0 + layout.RowBlockSize - 1) / layout.RowBlockSize
+	numColBlocks := layout.NumColBlocks
+	val4D, err := f.Reshape(paramFloat, numRowBlocks, 1, numColBlocks, 1)
+	if err != nil {
+		return nil, err
+	}
+	target4D := shapes.Make(dtypes.Float32, numRowBlocks, layout.RowBlockSize, numColBlocks, layout.ColBlockSize)
+	bcast4D, err := f.BroadcastInDim(val4D, target4D, []int{0, 1, 2, 3})
+	if err != nil {
+		return nil, err
+	}
+	fullRows := numRowBlocks * layout.RowBlockSize
+	fullCols := numColBlocks * layout.ColBlockSize
+	expanded, err := f.Reshape(bcast4D, fullRows, fullCols)
+	if err != nil {
+		return nil, err
+	}
+	if fullRows != d0 || fullCols != d1 {
+		expanded, err = f.Slice(expanded, []int{0, 0}, []int{d0, d1}, []int{1, 1})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return expanded, nil
+}
+
 // FusedQuantizedDense performs fused dequantization + matmul + optional bias + optional activation.
-func (f *Function) FusedQuantizedDense(x, weights, bias compute.Value, weightsQuantization *compute.Quantization, activation compute.ActivationType) (compute.Value, error) {
-	if weightsQuantization == nil {
-		return nil, errors.New("FusedQuantizedDense: weightsQuantization must not be nil")
-	}
-
-	if weightsQuantization.Scheme != compute.QuantLinear {
-		return nil, errors.Wrapf(compute.ErrNotImplemented, "FusedQuantizedDense: scheme %v not supported for onnxruntime backend", weightsQuantization.Scheme)
-	}
-
+func (f *Function) FusedQuantizedDense(x, weight, bias compute.Value, options compute.FusedQuantizedDenseConfig) (compute.Value, error) {
 	xNode, ok1 := x.(*Node)
-	wNode, ok2 := weights.(*Node)
+	wNode, ok2 := weight.(*Node)
 	if !ok1 || !ok2 {
 		return nil, errors.New("FusedQuantizedDense: inputs must be valid onnxruntime nodes")
 	}
 
-	// Dequantize weights: floatWeight = (weights - zeroPoint) * scale
-	wFloat, err := f.ConvertDType(wNode, dtypes.Float32)
-	if err != nil {
-		return nil, errors.Wrap(err, "FusedQuantizedDense: converting weights to float32 failed")
+	var biasShape shapes.Shape
+	if bias != nil {
+		biasNode, ok := bias.(*Node)
+		if !ok {
+			return nil, errors.New("FusedQuantizedDense: bias must be a valid onnxruntime node")
+		}
+		biasShape = biasNode.shape
 	}
 
-	if weightsQuantization.ZeroPoint != nil {
-		zpFloat, err := f.ConvertDType(weightsQuantization.ZeroPoint, dtypes.Float32)
+	wqShapes, wScaleNode, wZPNode, err := quantizationToShapes("FusedQuantizedDense", options.WeightQuantization)
+	if err != nil {
+		return nil, err
+	}
+	xqShapes, _, _, err := quantizationToShapes("FusedQuantizedDense", options.XQuantization)
+	if err != nil {
+		return nil, err
+	}
+	oqShapes, _, _, err := quantizationToShapes("FusedQuantizedDense", options.OutputQuantization)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := shapeinference.FusedQuantizedDenseWithInfo(xNode.shape, wNode.shape, biasShape, shapeinference.QuantizedDenseConfigShapes{
+		WeightQuantization: wqShapes,
+		XQuantization:      xqShapes,
+		OutputQuantization: oqShapes,
+		QuantizedMatmuls:   options.QuantizedMatmuls,
+		Activation:         options.Activation,
+		WeightLayout:       options.WeightLayout,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if options.WeightQuantization.Scheme != compute.QuantLinear {
+		return nil, errors.Wrapf(compute.ErrNotImplemented, "FusedQuantizedDense: scheme %v not supported for onnxruntime backend", options.WeightQuantization.Scheme)
+	}
+	if options.XQuantization != nil {
+		return nil, errors.Wrap(compute.ErrNotImplemented, "FusedQuantizedDense: XQuantization is not supported for onnxruntime backend")
+	}
+	if options.OutputQuantization != nil {
+		return nil, errors.Wrap(compute.ErrNotImplemented, "FusedQuantizedDense: OutputQuantization is not supported for onnxruntime backend")
+	}
+	if wNode.shape.DType != dtypes.Int8 && wNode.shape.DType != dtypes.Uint8 {
+		return nil, errors.Wrapf(compute.ErrNotImplemented, "FusedQuantizedDense: weight DType %s not supported for onnxruntime backend", wNode.shape.DType)
+	}
+	if wZPNode != nil && (wZPNode.shape.DType == dtypes.Int2 || wZPNode.shape.DType == dtypes.Uint2 || wZPNode.shape.DType == dtypes.Int4 || wZPNode.shape.DType == dtypes.Uint4) {
+		return nil, errors.Wrapf(compute.ErrNotImplemented, "FusedQuantizedDense: ZeroPoint DType %s not supported for onnxruntime backend", wZPNode.shape.DType)
+	}
+
+	d0, d1 := wNode.shape.Dimensions[0], wNode.shape.Dimensions[1]
+
+	// Dequantize weights: floatWeight = (float32(weight) - float32(zeroPoint)) * float32(scale)
+	wFloat, err := f.ConvertDType(wNode, dtypes.Float32)
+	if err != nil {
+		return nil, errors.Wrap(err, "FusedQuantizedDense: converting weight to float32 failed")
+	}
+
+	if wZPNode != nil {
+		zpExpanded, err := expandWeightQuantParam(f, wZPNode, info.WeightZeroPointLayout, d0, d1)
 		if err != nil {
-			return nil, errors.Wrap(err, "FusedQuantizedDense: converting zeroPoint to float32 failed")
+			return nil, errors.Wrap(err, "FusedQuantizedDense: expanding zeroPoint failed")
 		}
-		wNode := wFloat.(*Node)
-		zpReshaped, err := broadcastToShape(f, zpFloat, wNode)
-		if err != nil {
-			return nil, errors.Wrap(err, "FusedQuantizedDense: zeroPoint reshape failed")
-		}
-		wFloatVal, err := f.Sub(wFloat, zpReshaped)
+		wFloat, err = f.Sub(wFloat, zpExpanded)
 		if err != nil {
 			return nil, errors.Wrap(err, "FusedQuantizedDense: sub zeroPoint failed")
 		}
-		wFloat = wFloatVal
 	}
 
-	if weightsQuantization.Scale != nil {
-		scaleFloat, err := f.ConvertDType(weightsQuantization.Scale, dtypes.Float32)
+	if wScaleNode != nil {
+		scaleExpanded, err := expandWeightQuantParam(f, wScaleNode, info.WeightScaleLayout, d0, d1)
 		if err != nil {
-			return nil, errors.Wrap(err, "FusedQuantizedDense: converting scale to float32 failed")
+			return nil, errors.Wrap(err, "FusedQuantizedDense: expanding scale failed")
 		}
-		wNode := wFloat.(*Node)
-		scaleReshaped, err := broadcastToShape(f, scaleFloat, wNode)
-		if err != nil {
-			return nil, errors.Wrap(err, "FusedQuantizedDense: scale reshape failed")
-		}
-		wFloatVal, err := f.Mul(wFloat, scaleReshaped)
+		wFloat, err = f.Mul(wFloat, scaleExpanded)
 		if err != nil {
 			return nil, errors.Wrap(err, "FusedQuantizedDense: mul scale failed")
 		}
-		wFloat = wFloatVal
+	}
+
+	if info.FloatComputeDType != dtypes.Float32 {
+		wFloat, err = f.ConvertDType(wFloat, info.FloatComputeDType)
+		if err != nil {
+			return nil, errors.Wrapf(err, "FusedQuantizedDense: converting dequantized weight to %s failed", info.FloatComputeDType)
+		}
 	}
 
 	return f.FusedDense(xNode, wFloat, bias, compute.DenseConfig{
-		Activation:   compute.ActivationConfig{Type: activation},
-		WeightLayout: compute.DenseLayoutInputOutputs,
+		Activation:   options.Activation,
+		WeightLayout: options.WeightLayout,
 	})
 }
 

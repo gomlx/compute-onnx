@@ -1,5 +1,8 @@
 # Changelog
 
+- 2026-11-12:
+  - Updated `FusedQuantizedDense` (`internal/graph/ops_fused.go`) to the new `compute.FusedQuantizedDenseConfig` signature, adding full support for scalar, 1D per-channel, and 2D block (`BlockAxis` `0` and `1`, including non-divisible `BlockSize`) `QuantLinear` scales and zero-points across `DenseLayoutInputOutputs` and `DenseLayoutOutputsInput`.
+
 - 2026-11-07:
   - Implemented full `Pad` and `DynamicPad` support (`internal/graph/ops_special.go`):
     - Added interior padding (`Interior > 0` and dynamic `InteriorValue`) by reshaping each interior-padded axis $D_i$ to $(D_i, 1)$, padding the inserted unit axis by $(0, I_i)$ with `fillValue`, reshaping back to $D_i \cdot (1 + I_i)$, and compensating the trailing $I_i$ elements in the end padding ($E_i - I_i$).
