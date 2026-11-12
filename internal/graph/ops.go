@@ -86,6 +86,7 @@ func init() {
 	registerOp(compute.OpTypeConvertDType)
 
 	// Special Ops
+	registerOp(compute.OpTypeClamp)
 	registerOp(compute.OpTypeIdentity)
 	registerOp(compute.OpTypeWhere)
 	registerOp(compute.OpTypeReshape)
