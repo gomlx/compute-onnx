@@ -163,18 +163,20 @@ func TestFusedQuantizedDense(t *testing.T) {
 	defer b.Finalize()
 
 	x := [][]float32{{1.0, 2.0}}
-	// Integer weights [2, 2]
-	weightsInt := [][]int32{{10, 20}, {30, 40}}
+	// Int8 weights [2, 2]
+	weightsInt := [][]int8{{10, 20}, {30, 40}}
 	scale := []float32{0.1, 0.1}
-	zeroPoint := []int32{0, 0}
+	zeroPoint := []int8{0, 0}
 
 	got, err := testutil.Exec1(b, []any{x, weightsInt, scale, zeroPoint}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
-		quant := &compute.Quantization{
-			Scheme:    compute.QuantLinear,
-			Scale:     params[2],
-			ZeroPoint: params[3],
-		}
-		return f.FusedQuantizedDense(params[0], params[1], nil, quant, compute.ActivationNone)
+		return f.FusedQuantizedDense(params[0], params[1], nil, compute.FusedQuantizedDenseConfig{
+			WeightQuantization: &compute.Quantization{
+				Scheme:    compute.QuantLinear,
+				Scale:     params[2],
+				ZeroPoint: params[3],
+			},
+			WeightLayout: compute.DenseLayoutInputOutputs,
+		})
 	})
 	if err != nil {
 		t.Fatalf("FusedQuantizedDense failed: %+v", err)
@@ -315,7 +317,7 @@ func TestEinsumFloat64(t *testing.T) {
 	defer b.Finalize()
 
 	lhs := [][][]float64{{{1, 2, 3}, {4, 5, 6}}} // [1, 2, 3]
-	rhs := [][]float64{{0.1, 0.2}}              // [1, 2]
+	rhs := [][]float64{{0.1, 0.2}}               // [1, 2]
 	got, err := testutil.Exec1(b, []any{lhs, rhs}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
 		return f.DotGeneral(params[0], []int{1}, nil, params[1], []int{1}, nil, compute.DotGeneralConfig{})
 	})

@@ -120,11 +120,11 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
 ### 2.7 `FusedQuantizedDense`
 - **GoMLX Interface**:
   ```go
-  FusedQuantizedDense(x, weights, bias Value, weightsQuantization *Quantization, activation ActivationType) (Value, error)
+  FusedQuantizedDense(x, weight, bias Value, options FusedQuantizedDenseConfig) (Value, error)
   ```
-- **ONNX Operator Mapping**: Dequantizes integer weights to float32 using `floatWeight = (weights - zeroPoint) * scale`, then delegates to `FusedDense`.
+- **ONNX Operator Mapping**: Validates quantization metadata via `shapeinference.FusedQuantizedDenseWithInfo`, expands scalar/per-channel/2D block `Scale` and `ZeroPoint` (`BlockAxis` `0` and `1`), dequantizes `Int8`/`Uint8` weights using `floatWeight = (float32(weight) - float32(zeroPoint)) * float32(scale)`, casts to `x`'s float DType if needed, and delegates to `FusedDense` (supporting both `DenseLayoutInputOutputs` and `DenseLayoutOutputsInput`).
 - **Shortcomings & Limitations**:
-  - Currently supports `QuantLinear` (affine quantization). `QuantNF4` and `QuantGGML` block formats return `ErrNotImplemented`.
+  - Supports weight-only `QuantLinear` (`Int8`/`Uint8`). `QuantNF4`, `QuantGGML`, sub-byte weight DTypes, `XQuantization`, `OutputQuantization`, and `FusedQuantizedDenseVJP` return `ErrNotImplemented`.
 
 ---
 
