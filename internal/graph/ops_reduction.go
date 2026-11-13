@@ -258,7 +258,8 @@ func (f *Function) ArgMinMax(x compute.Value, axis int, outputDType dtypes.DType
 		effAxis = 1
 		int64Shape = shapes.Make(dtypes.Int64, 1)
 	} else {
-		int64Shape = shapes.Make(dtypes.Int64, outShape.Dimensions...)
+		int64Shape = outShape.Clone()
+		int64Shape.DType = dtypes.Int64
 	}
 
 	f.nodeCount++

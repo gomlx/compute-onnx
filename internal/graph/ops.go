@@ -106,6 +106,7 @@ func init() {
 	registerOp(compute.OpTypeIota)
 	registerOp(compute.OpTypeDynamicIota)
 	registerOp(compute.OpTypeCumSum)
+	registerOp(compute.OpTypeNonZero)
 
 	// Reductions
 	registerOp(compute.OpTypeReduceMin)

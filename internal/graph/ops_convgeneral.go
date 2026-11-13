@@ -3,13 +3,10 @@
 package graph
 
 import (
-	"fmt"
-
 	"github.com/gomlx/compute"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapeinference"
-	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
 
@@ -31,6 +28,7 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 	if err != nil {
 		return nil, err
 	}
+	outShape = f.NameAnonymousDynamicAxes(outShape, "#conv")
 
 	rank := inputNode.shape.Rank()
 	numSpatial := rank - 2
@@ -178,17 +176,23 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 	for i, spatialIdx := range axes.OutputSpatial {
 		convOutDims[2+i] = outShape.Dimensions[spatialIdx]
 	}
-	convOutShape := shapes.Make(convOutDType, convOutDims...)
+	var convOutAxisNames []string
+	if outShape.AxisNames != nil {
+		convOutAxisNames = make([]string, rank)
+		convOutAxisNames[0] = outShape.AxisName(axes.OutputBatch)
+		convOutAxisNames[1] = outShape.AxisName(axes.OutputChannels)
+		for i, spatialIdx := range axes.OutputSpatial {
+			convOutAxisNames[2+i] = outShape.AxisName(spatialIdx)
+		}
+	}
+	convOutShape := makeShape(convOutDType, convOutDims, convOutAxisNames)
 
-	f.nodeCount++
-	convNode := &Node{
-		name:       fmt.Sprintf("node_%d", f.nodeCount),
+	convNode := f.addNode(&Node{
 		opType:     "Conv",
 		inputs:     []*Node{inpVal.(*Node), kerVal.(*Node)},
 		shape:      convOutShape,
 		attributes: attributes,
-	}
-	f.nodes = append(f.nodes, convNode)
+	})
 
 	// 5. Transpose conv output back to target layout (OutputBatch, OutputChannels, OutputSpatial...)
 	// convNode layout is [0=Batch, 1=Channels, 2..2+spatialRank-1=Spatial...]

@@ -71,6 +71,7 @@ func (f *Function) DotGeneral(
 	if err != nil {
 		return nil, err
 	}
+	outShape = f.NameAnonymousDynamicAxes(outShape, "#dot")
 
 	// 2. Generate Einsum equation
 	charPool := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -303,14 +304,11 @@ func (f *Function) DotGeneral(
 				matOutShape = shapes.Make(accumulationDType, matDims...)
 			}
 
-			f.nodeCount++
-			matmulNode := &Node{
-				name:   fmt.Sprintf("node_%d", f.nodeCount),
+			matmulNode := f.addNode(&Node{
 				opType: "MatMul",
 				inputs: []*Node{matLhs, matRhs},
 				shape:  matOutShape,
-			}
-			f.nodes = append(f.nodes, matmulNode)
+			})
 			lastNode = matmulNode
 
 			// If we unsqueezed LHS or RHS, reshape back to outShape
@@ -341,9 +339,7 @@ func (f *Function) DotGeneral(
 		einsumShape := outShape
 		einsumShape.DType = accumulationDType
 
-		f.nodeCount++
-		einsumNode := &Node{
-			name:   fmt.Sprintf("node_%d", f.nodeCount),
+		einsumNode := f.addNode(&Node{
 			opType: "Einsum",
 			inputs: []*Node{lhsInput, rhsInput},
 			shape:  einsumShape,
@@ -354,8 +350,7 @@ func (f *Function) DotGeneral(
 					S:    []byte(equation),
 				},
 			},
-		}
-		f.nodes = append(f.nodes, einsumNode)
+		})
 		lastNode = einsumNode
 	}
 	if lastNode.shape.Rank() != outShape.Rank() {

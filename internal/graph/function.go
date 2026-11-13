@@ -5,29 +5,41 @@ package graph
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/executionprovider"
+	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/dtypes/bfloat16"
 	"github.com/gomlx/compute/dtypes/float16"
 	"github.com/gomlx/compute/notimplemented"
 	"github.com/gomlx/compute/shapes"
+	"github.com/gomlx/compute/support/sets"
 	"github.com/pkg/errors"
 )
 
+type dynamicAxisSource struct {
+	node *Node
+	axis int
+}
+
 type Function struct {
 	notimplemented.Function
-	name              string
-	builder           *Builder
-	parent            *Function
-	executionProvider executionprovider.Type
-	params            []*Node
-	nodes             []*Node
-	returns           []*Node
-	nodeCount         int
-	constCache        map[string]*Node
+	name                  string
+	builder               *Builder
+	parent                *Function
+	executionProvider     executionprovider.Type
+	params                []*Node
+	nodes                 []*Node
+	returns               []*Node
+	nodeCount             int
+	constCache            map[string]*Node
+	knownDynamicAxisNames sets.Set[string]
+	dynamicAxisSources    map[string]dynamicAxisSource
+	localAxisID           atomic.Uint64
 }
 
 var _ compute.Function = (*Function)(nil)
@@ -60,7 +72,122 @@ func (f *Function) addNode(node *Node) *Node {
 		}
 	}
 	f.nodes = append(f.nodes, node)
+	f.recordDynamicAxisSources(node)
 	return node
+}
+
+func (f *Function) rootFunction() *Function {
+	root := f
+	for root.parent != nil {
+		root = root.parent
+	}
+	return root
+}
+
+// KnownDynamicAxisNames returns the set of dynamically defined axis names known by the function.
+func (f *Function) KnownDynamicAxisNames() sets.Set[string] {
+	root := f.rootFunction()
+	if root.knownDynamicAxisNames == nil {
+		root.knownDynamicAxisNames = sets.Make[string]()
+	}
+	return root.knownDynamicAxisNames
+}
+
+// UniqueAxisName returns a unique dynamic axis name derived from base.
+func (f *Function) UniqueAxisName(base string) string {
+	if f.builder != nil {
+		return f.builder.UniqueAxisName(base)
+	}
+	root := f.rootFunction()
+	return fmt.Sprintf("%s_%d", base, root.localAxisID.Add(1))
+}
+
+// NameAnonymousDynamicAxes assigns fresh names to anonymous dynamic axes in
+// shape. Named dynamic axes are retained. The fresh names let runtime size
+// bindings propagate through downstream operations that inspect this node's
+// shape at graph construction time.
+func (f *Function) NameAnonymousDynamicAxes(shape shapes.Shape, base string) shapes.Shape {
+	var names []string
+	for axis, dim := range shape.Dimensions {
+		if dim != shapes.DynamicDim || shape.AxisName(axis) != shapes.AnonymousAxis {
+			continue
+		}
+		if names == nil {
+			names = slices.Clone(shape.AxisNames)
+			if names == nil {
+				names = make([]string, shape.Rank())
+			}
+		}
+		known := f.KnownDynamicAxisNames()
+		for {
+			candidate := f.UniqueAxisName(base)
+			if !known.Has(candidate) {
+				names[axis] = candidate
+				known.Insert(candidate)
+				break
+			}
+		}
+	}
+	if names == nil {
+		return shape
+	}
+	shape.AxisNames = names
+	return shape
+}
+
+func (f *Function) recordDynamicAxisSources(node *Node) {
+	if node == nil || !node.shape.IsDynamic() {
+		return
+	}
+	root := f.rootFunction()
+	if root.knownDynamicAxisNames == nil {
+		root.knownDynamicAxisNames = sets.Make[string]()
+	}
+	if root.dynamicAxisSources == nil {
+		root.dynamicAxisSources = make(map[string]dynamicAxisSource)
+	}
+	for axis, dim := range node.shape.Dimensions {
+		if dim != shapes.DynamicDim {
+			continue
+		}
+		name := node.shape.AxisName(axis)
+		if name == "" || name == shapes.AnonymousAxis {
+			continue
+		}
+		root.knownDynamicAxisNames.Insert(name)
+		if _, exists := root.dynamicAxisSources[name]; !exists {
+			root.dynamicAxisSources[name] = dynamicAxisSource{node: node, axis: axis}
+		}
+	}
+}
+
+func (f *Function) resolveDynamicAxisDim1D(name string) (*Node, bool) {
+	if name == "" || name == shapes.AnonymousAxis {
+		return nil, false
+	}
+	root := f.rootFunction()
+	src, ok := root.dynamicAxisSources[name]
+	if !ok || src.node == nil {
+		return nil, false
+	}
+	shapeNode64 := f.addNode(&Node{
+		opType: "Shape",
+		inputs: []*Node{src.node},
+		shape:  shapes.Make(dtypes.Int64, 1),
+		attributes: []*onnx.AttributeProto{
+			{
+				Name: "start",
+				Type: onnx.AttributeProto_INT,
+				I:    int64(src.axis),
+			},
+			{
+				Name: "end",
+				Type: onnx.AttributeProto_INT,
+				I:    int64(src.axis + 1),
+			},
+		},
+	})
+	return shapeNode64, true
 }
 
 func (f *Function) constCacheKey(shape shapes.Shape, flat any) string {
@@ -257,6 +384,7 @@ func (f *Function) Parameter(name string, shape shapes.Shape, spec *compute.Shar
 	}
 	f.params = append(f.params, node)
 	f.nodes = append(f.nodes, node)
+	f.recordDynamicAxisSources(node)
 	return node, nil
 }
 

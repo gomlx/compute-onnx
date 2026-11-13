@@ -5,10 +5,13 @@ package onnxbackend
 import (
 	"bytes"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/dtypes"
+	"github.com/gomlx/compute/dtypes/bfloat16"
+	"github.com/gomlx/compute/dtypes/float16"
 	"github.com/gomlx/compute/shapes"
 )
 
@@ -452,6 +455,420 @@ func TestDynamicOps(t *testing.T) {
 		}
 		if !slices.Equal(res, expected) {
 			t.Fatalf("expected %v, got %v", expected, res)
+		}
+	})
+
+	t.Run("AnonymousDynamicAxesAndSaveLoad", func(t *testing.T) {
+		onBackend := backend.(*Backend)
+		onBackend.SetKeepModelProto(true)
+		defer onBackend.SetKeepModelProto(false)
+
+		builder := backend.Builder("test_anon_dyn")
+		mainFn := builder.Main()
+
+		// Two independent anonymous axes at index 0 must not share a symbolic DimParam in ONNX.
+		anonShape := shapes.MakeDynamic(dtypes.Float32, []int{shapes.DynamicDim}, []string{shapes.AnonymousAxis})
+		p0, err := mainFn.Parameter("a", anonShape, nil)
+		if err != nil {
+			t.Fatalf("Parameter a failed: %v", err)
+		}
+		p1, err := mainFn.Parameter("b", anonShape, nil)
+		if err != nil {
+			t.Fatalf("Parameter b failed: %v", err)
+		}
+		concat, err := mainFn.Concatenate(0, p0, p1)
+		if err != nil {
+			t.Fatalf("Concatenate failed: %v", err)
+		}
+		if err := mainFn.Return([]compute.Value{concat}, nil); err != nil {
+			t.Fatalf("Return failed: %v", err)
+		}
+
+		exec, err := builder.Compile()
+		if err != nil {
+			t.Fatalf("Compile failed: %v", err)
+		}
+		defer exec.Finalize()
+
+		var buf bytes.Buffer
+		if err := SaveModel(backend, exec, &buf, nil, nil); err != nil {
+			t.Fatalf("SaveModel failed: %v", err)
+		}
+		loadedExec, err := LoadModel(backend, &buf)
+		if err != nil {
+			t.Fatalf("LoadModel failed: %v", err)
+		}
+		defer loadedExec.Finalize()
+
+		inA, err := backend.BufferFromFlatData(0, []float32{1, 2}, shapes.Make(dtypes.Float32, 2))
+		if err != nil {
+			t.Fatalf("BufferFromFlatData a failed: %v", err)
+		}
+		defer inA.Finalize()
+		inB, err := backend.BufferFromFlatData(0, []float32{3, 4, 5}, shapes.Make(dtypes.Float32, 3))
+		if err != nil {
+			t.Fatalf("BufferFromFlatData b failed: %v", err)
+		}
+		defer inB.Finalize()
+
+		outBufs, err := loadedExec.Execute([]compute.Buffer{inA, inB}, nil, 0)
+		if err != nil {
+			t.Fatalf("Execute failed: %v", err)
+		}
+		defer outBufs[0].Finalize()
+
+		got := make([]float32, 5)
+		if err := outBufs[0].ToFlatData(got); err != nil {
+			t.Fatalf("ToFlatData failed: %v", err)
+		}
+		if !slices.Equal(got, []float32{1, 2, 3, 4, 5}) {
+			t.Fatalf("expected [1 2 3 4 5], got %v", got)
+		}
+	})
+
+	t.Run("PoolAndArgMaxDynamic", func(t *testing.T) {
+		builder := backend.Builder("test_pool_argmax_dyn")
+		mainFn := builder.Main()
+
+		inShape := shapes.MakeDynamic(dtypes.Float32, []int{shapes.DynamicDim, 4, 1}, []string{"batch", "", ""})
+		x, err := mainFn.Parameter("x", inShape, nil)
+		if err != nil {
+			t.Fatalf("Parameter failed: %v", err)
+		}
+		pooled, err := mainFn.ReduceWindow(x, compute.ReduceOpMax, []int{1, 2, 1}, []int{1, 2, 1}, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("ReduceWindow failed: %v", err)
+		}
+		argMax, err := mainFn.ArgMinMax(pooled, 1, dtypes.Int32, false)
+		if err != nil {
+			t.Fatalf("ArgMinMax failed: %v", err)
+		}
+		if err := mainFn.Return([]compute.Value{argMax}, nil); err != nil {
+			t.Fatalf("Return failed: %v", err)
+		}
+
+		exec, err := builder.Compile()
+		if err != nil {
+			t.Fatalf("Compile failed: %v", err)
+		}
+		defer exec.Finalize()
+
+		inBuf, err := backend.BufferFromFlatData(0, []float32{1, 5, 3, 2, 9, 4, 7, 8}, shapes.Make(dtypes.Float32, 2, 4, 1))
+		if err != nil {
+			t.Fatalf("BufferFromFlatData failed: %v", err)
+		}
+		defer inBuf.Finalize()
+
+		outBufs, err := exec.Execute([]compute.Buffer{inBuf}, nil, 0)
+		if err != nil {
+			t.Fatalf("Execute failed: %v", err)
+		}
+		defer outBufs[0].Finalize()
+
+		got := make([]int32, 2)
+		if err := outBufs[0].ToFlatData(got); err != nil {
+			t.Fatalf("ToFlatData failed: %v", err)
+		}
+		if !slices.Equal(got, []int32{0, 0}) {
+			t.Fatalf("expected [0 0], got %v", got)
+		}
+	})
+
+	t.Run("NonZeroAndUniqueAxisNames", func(t *testing.T) {
+		// 1. Verify minted unique axis names on NonZero, ConvGeneral, and DotGeneral allow downstream binary/broadcast/iota ops.
+		builder := backend.Builder("test_nonzero_unique_axis")
+		mainFn := builder.Main()
+
+		xShape := shapes.MakeDynamic(dtypes.Float32, []int{shapes.DynamicDim, 3}, []string{"rows", ""})
+		x, err := mainFn.Parameter("x", xShape, nil)
+		if err != nil {
+			t.Fatalf("Parameter failed: %v", err)
+		}
+
+		coords, err := mainFn.NonZero(x, compute.NonZeroConfig{})
+		if err != nil {
+			t.Fatalf("NonZero failed: %v", err)
+		}
+		coordsShape, err := mainFn.Shape(coords)
+		if err != nil {
+			t.Fatalf("Shape(coords) failed: %v", err)
+		}
+		countAxis := coordsShape.AxisName(0)
+		if !strings.HasPrefix(countAxis, "#nonzeros_") {
+			t.Fatalf("expected minted #nonzeros_* axis name, got %q", countAxis)
+		}
+
+		// Duplicate explicit CountAxisName must fail.
+		if _, err := mainFn.NonZero(x, compute.NonZeroConfig{CountAxisName: countAxis}); err == nil {
+			t.Fatalf("expected error on duplicate CountAxisName %q", countAxis)
+		}
+		if _, err := mainFn.NonZero(x, compute.NonZeroConfig{CountAxisName: "rows"}); err == nil {
+			t.Fatalf("expected error on CountAxisName conflicting with parameter axis")
+		}
+
+		// Downstream ops referencing the minted countAxis name without explicit Value node:
+		rowIds, err := mainFn.DynamicIota(dtypes.Int64, 0,
+			compute.DynamicDimensionSpec{Name: countAxis},
+			compute.DynamicDimensionSpec{Static: 2},
+		)
+		if err != nil {
+			t.Fatalf("DynamicIota with minted countAxis failed: %v", err)
+		}
+		oneScalar, err := mainFn.Constant([]int64{1})
+		if err != nil {
+			t.Fatalf("Constant failed: %v", err)
+		}
+		onesBroadcast, err := mainFn.BroadcastInDim(oneScalar, coordsShape, nil)
+		if err != nil {
+			t.Fatalf("BroadcastInDim to minted countAxis failed: %v", err)
+		}
+		sum1, err := mainFn.Add(coords, rowIds)
+		if err != nil {
+			t.Fatalf("Add(coords, rowIds) failed: %v", err)
+		}
+		sum2, err := mainFn.Add(sum1, onesBroadcast)
+		if err != nil {
+			t.Fatalf("Add(sum1, onesBroadcast) failed: %v", err)
+		}
+
+		if err := mainFn.Return([]compute.Value{coords, sum2}, nil); err != nil {
+			t.Fatalf("Return failed: %v", err)
+		}
+		exec, err := builder.Compile()
+		if err != nil {
+			t.Fatalf("Compile failed: %v", err)
+		}
+		defer exec.Finalize()
+
+		// Execute with 3 nonzeros, then 0 nonzeros, then 2 nonzeros on the same compiled executable.
+		for _, tc := range []struct {
+			rows       int
+			flat       []float32
+			wantCoords []int64
+			wantSum    []int64
+		}{
+			{
+				rows:       2,
+				flat:       []float32{0, 4, 0, 2, 0, 3},
+				wantCoords: []int64{0, 1, 1, 0, 1, 2},
+				wantSum:    []int64{1, 2, 3, 2, 4, 5}, // coords + [[0,0],[1,1],[2,2]] + 1
+			},
+			{
+				rows:       1,
+				flat:       []float32{0, 0, 0},
+				wantCoords: []int64{},
+				wantSum:    []int64{},
+			},
+			{
+				rows:       1,
+				flat:       []float32{5, 0, 9},
+				wantCoords: []int64{0, 0, 0, 2},
+				wantSum:    []int64{1, 1, 2, 4},
+			},
+		} {
+			inBuf, err := backend.BufferFromFlatData(0, tc.flat, shapes.Make(dtypes.Float32, tc.rows, 3))
+			if err != nil {
+				t.Fatalf("BufferFromFlatData failed: %v", err)
+			}
+			outs, err := exec.Execute([]compute.Buffer{inBuf}, nil, 0)
+			inBuf.Finalize()
+			if err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+			gotCoords := make([]int64, len(tc.wantCoords))
+			if err := outs[0].ToFlatData(gotCoords); err != nil {
+				t.Fatalf("ToFlatData coords failed: %v", err)
+			}
+			gotSum := make([]int64, len(tc.wantSum))
+			if err := outs[1].ToFlatData(gotSum); err != nil {
+				t.Fatalf("ToFlatData sum failed: %v", err)
+			}
+			outs[0].Finalize()
+			outs[1].Finalize()
+			if !slices.Equal(gotCoords, tc.wantCoords) {
+				t.Fatalf("coords = %v, want %v", gotCoords, tc.wantCoords)
+			}
+			if !slices.Equal(gotSum, tc.wantSum) {
+				t.Fatalf("sum = %v, want %v", gotSum, tc.wantSum)
+			}
+		}
+	})
+
+	t.Run("NonZeroAllDTypesAndScalarZero", func(t *testing.T) {
+		runNZ1D := func(t *testing.T, dtype dtypes.DType, flat any) []int64 {
+			t.Helper()
+			if !backend.Capabilities().DTypes[dtype] {
+				t.Skipf("dtype %s not supported", dtype)
+			}
+			b := backend.Builder("nz_" + dtype.String())
+			fn := b.Main()
+			p, err := fn.Parameter("x", shapes.Make(dtype, 3), nil)
+			if err != nil {
+				t.Fatalf("Parameter(%s): %v", dtype, err)
+			}
+			nz, err := fn.NonZero(p, compute.NonZeroConfig{})
+			if err != nil {
+				t.Fatalf("NonZero(%s): %v", dtype, err)
+			}
+			if err := fn.Return([]compute.Value{nz}, nil); err != nil {
+				t.Fatalf("Return(%s): %v", dtype, err)
+			}
+			ex, err := b.Compile()
+			if err != nil {
+				t.Fatalf("Compile(%s): %v", dtype, err)
+			}
+			defer ex.Finalize()
+			inBuf, err := backend.BufferFromFlatData(0, flat, shapes.Make(dtype, 3))
+			if err != nil {
+				t.Fatalf("BufferFromFlatData(%s): %v", dtype, err)
+			}
+			defer inBuf.Finalize()
+			outs, err := ex.Execute([]compute.Buffer{inBuf}, nil, 0)
+			if err != nil {
+				t.Fatalf("Execute(%s): %v", dtype, err)
+			}
+			defer outs[0].Finalize()
+			sh, _ := outs[0].Shape()
+			got := make([]int64, sh.Size())
+			if err := outs[0].ToFlatData(got); err != nil {
+				t.Fatalf("ToFlatData(%s): %v", dtype, err)
+			}
+			return got
+		}
+
+		for _, tc := range []struct {
+			dtype dtypes.DType
+			flat  any
+		}{
+			{dtypes.Bool, []bool{false, true, true}},
+			{dtypes.Int8, []int8{0, -2, 3}},
+			{dtypes.Int16, []int16{0, -2, 3}},
+			{dtypes.Int32, []int32{0, -2, 3}},
+			{dtypes.Int64, []int64{0, -2, 3}},
+			{dtypes.Uint8, []uint8{0, 2, 3}},
+			{dtypes.Uint16, []uint16{0, 2, 3}},
+			{dtypes.Uint32, []uint32{0, 2, 3}},
+			{dtypes.Uint64, []uint64{0, 2, uint64(1) << 63}},
+			{dtypes.Float16, []float16.Float16{float16.FromFloat32(0), float16.FromFloat32(-1.5), float16.FromFloat32(2)}},
+			{dtypes.BFloat16, []bfloat16.BFloat16{bfloat16.FromFloat32(0), bfloat16.FromFloat32(-1.5), bfloat16.FromFloat32(2)}},
+			{dtypes.Float32, []float32{0, -1.5, 2}},
+			{dtypes.Float64, []float64{0, 1e-300, -2.5}},
+		} {
+			t.Run(tc.dtype.String(), func(t *testing.T) {
+				got := runNZ1D(t, tc.dtype, tc.flat)
+				if !slices.Equal(got, []int64{1, 2}) {
+					t.Fatalf("NonZero(%s) = %v, want [1 2]", tc.dtype, got)
+				}
+			})
+		}
+
+		// Scalar zero with both Transpose=false ([0, 0]) and Transpose=true ([0, 0]), and scalar nonzero with Transpose=true ([0, 1]).
+		for _, transpose := range []bool{false, true} {
+			b := backend.Builder("nz_scalar")
+			fn := b.Main()
+			p, err := fn.Parameter("x", shapes.Make(dtypes.Float32), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nz, err := fn.NonZero(p, compute.NonZeroConfig{Transpose: transpose})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := fn.Return([]compute.Value{nz}, nil); err != nil {
+				t.Fatal(err)
+			}
+			ex, err := b.Compile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ex.Finalize()
+
+			for _, val := range []float32{0, 7} {
+				inBuf, err := backend.BufferFromFlatData(0, []float32{val}, shapes.Make(dtypes.Float32))
+				if err != nil {
+					t.Fatal(err)
+				}
+				outs, err := ex.Execute([]compute.Buffer{inBuf}, nil, 0)
+				inBuf.Finalize()
+				if err != nil {
+					t.Fatal(err)
+				}
+				sh, _ := outs[0].Shape()
+				outs[0].Finalize()
+				wantDims := []int{0, 0}
+				if val != 0 {
+					if transpose {
+						wantDims = []int{0, 1}
+					} else {
+						wantDims = []int{1, 0}
+					}
+				}
+				if !slices.Equal(sh.Dimensions, wantDims) {
+					t.Fatalf("scalar(%v, transpose=%v) shape = %v, want %v", val, transpose, sh.Dimensions, wantDims)
+				}
+			}
+		}
+	})
+
+	t.Run("NameAnonymousDynamicAxesInConvAndDot", func(t *testing.T) {
+		builder := backend.Builder("test_conv_dot_named_anon")
+		fn := builder.Main()
+
+		inShape := shapes.MakeDynamic(dtypes.Float32, []int{1, shapes.DynamicDim, 1}, []string{"", shapes.AnonymousAxis, ""})
+		x, err := fn.Parameter("x", inShape, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kernel, err := fn.Constant([]float32{1, 1}, 2, 1, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conv, err := fn.ConvGeneral(x, kernel, compute.ConvolveAxesConfig{
+			InputBatch: 0, InputChannels: 2, InputSpatial: []int{1},
+			KernelInputChannels: 1, KernelOutputChannels: 2, KernelSpatial: []int{0},
+			OutputBatch: 0, OutputChannels: 2, OutputSpatial: []int{1},
+		}, []int{2}, [][2]int{{0, 0}}, []int{1}, []int{1}, 1, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		convShape, _ := fn.Shape(conv)
+		if !strings.HasPrefix(convShape.AxisName(1), "#conv_") {
+			t.Fatalf("expected #conv_* axis name on strided ConvGeneral output, got %q", convShape.AxisName(1))
+		}
+		// Binary op between conv and Neg(conv) requires AxisNameEqual to hold on the derived dynamic axis.
+		negConv, err := fn.Neg(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		zeroCheck, err := fn.Add(conv, negConv)
+		if err != nil {
+			t.Fatalf("Add(conv, Neg(conv)) failed: %v", err)
+		}
+		if err := fn.Return([]compute.Value{zeroCheck}, nil); err != nil {
+			t.Fatal(err)
+		}
+		exec, err := builder.Compile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer exec.Finalize()
+
+		inBuf, err := backend.BufferFromFlatData(0, []float32{1, 2, 3, 4, 5}, shapes.Make(dtypes.Float32, 1, 5, 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer inBuf.Finalize()
+		outs, err := exec.Execute([]compute.Buffer{inBuf}, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer outs[0].Finalize()
+		got := make([]float32, 2)
+		if err := outs[0].ToFlatData(got); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, []float32{0, 0}) {
+			t.Fatalf("got %v, want [0 0]", got)
 		}
 	})
 }

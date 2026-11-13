@@ -397,11 +397,21 @@ func (f *Function) ReduceWindow(
 		origSpatialAxis := inputPerm[2+i]
 		poolOutDims[2+i] = outShape.Dimensions[origSpatialAxis]
 	}
+	var poolOutAxisNames []string
+	if outShape.AxisNames != nil {
+		poolOutAxisNames = make([]string, rank)
+		poolOutAxisNames[0] = outShape.AxisName(0)
+		poolOutAxisNames[1] = outShape.AxisName(channelAxis)
+		for i := range numSpatial {
+			origSpatialAxis := inputPerm[2+i]
+			poolOutAxisNames[2+i] = outShape.AxisName(origSpatialAxis)
+		}
+	}
 	poolDType := outShape.DType
 	if needDTypeCast {
 		poolDType = dtypes.Float32
 	}
-	poolOutShape := shapes.Make(poolDType, poolOutDims...)
+	poolOutShape := makeShape(poolDType, poolOutDims, poolOutAxisNames)
 
 	f.nodeCount++
 	poolNode := &Node{

@@ -142,9 +142,21 @@ func (f *Function) BroadcastInDim(x compute.Value, outputShape shapes.Shape, bro
 		return nil, errors.New("input must be a valid onnxruntime node")
 	}
 
-	err := shapeinference.BroadcastInDim(xNode.shape, outputShape, broadcastAxes, nil)
+	err := shapeinference.BroadcastInDim(xNode.shape, outputShape, broadcastAxes, f.KnownDynamicAxisNames())
 	if err != nil {
 		return nil, err
+	}
+
+	if outputShape.IsDynamic() {
+		specs := make([]compute.DynamicDimensionSpec, outputShape.Rank())
+		for i, d := range outputShape.Dimensions {
+			if d == shapes.DynamicDim {
+				specs[i] = compute.DynamicDimensionSpec{Name: outputShape.AxisName(i)}
+			} else {
+				specs[i] = compute.DynamicDimensionSpec{Static: d}
+			}
+		}
+		return f.DynamicBroadcastInDim(xNode, broadcastAxes, specs...)
 	}
 
 	reshapeDims := make([]int, outputShape.Rank())
@@ -198,6 +210,7 @@ func (f *Function) Concatenate(axis int, inputs ...compute.Value) (compute.Value
 	if err != nil {
 		return nil, err
 	}
+	outShape = f.NameAnonymousDynamicAxes(outShape, "#concat")
 
 	node := &Node{
 		opType: "Concat",
@@ -246,7 +259,7 @@ func (f *Function) Slice(x compute.Value, start []int, limit []int, stride []int
 
 	for i := range rank {
 		starts64[i] = int64(start[i])
-		if limit[i] == shapes.DynamicDim || (xNode.shape.Dimensions[i] == shapes.DynamicDim && limit[i] <= 0) {
+		if limit[i] == shapes.DynamicDim || (xNode.shape.Dimensions[i] == shapes.DynamicDim && limit[i] < 0) {
 			ends64[i] = math.MaxInt64
 		} else {
 			ends64[i] = int64(limit[i])
@@ -504,7 +517,7 @@ func (f *Function) DynamicReshape(operand compute.Value, dimensions ...compute.D
 				}
 			}
 			parts[i] = v
-		} else if spec.Static > 0 {
+		} else if spec.Name == "" {
 			constNode, err := f.Constant([]int64{int64(spec.Static)}, 1)
 			if err != nil {
 				return nil, err
@@ -557,7 +570,7 @@ func (f *Function) DynamicBroadcastInDim(operand compute.Value, broadcastAxes []
 		return nil, errors.New("input must be a valid onnxruntime node")
 	}
 
-	outShape, err := shapeinference.DynamicBroadcastInDim(xNode.shape, broadcastAxes, dimensions, nil)
+	outShape, err := shapeinference.DynamicBroadcastInDim(xNode.shape, broadcastAxes, dimensions, f.KnownDynamicAxisNames())
 	if err != nil {
 		return nil, err
 	}
@@ -627,7 +640,7 @@ func (f *Function) DynamicBroadcastInDim(operand compute.Value, broadcastAxes []
 				}
 			}
 			parts[i] = v
-		} else if spec.Static > 0 {
+		} else if spec.Name == "" {
 			constNode, err := f.Constant([]int64{int64(spec.Static)}, 1)
 			if err != nil {
 				return nil, err
@@ -660,7 +673,13 @@ func (f *Function) DynamicBroadcastInDim(operand compute.Value, broadcastAxes []
 				}
 			}
 			if !resolved {
-				return nil, errors.Errorf("DynamicBroadcastInDim: axis %d requires a non-nil Value node or positive Static dimension", i)
+				if dimNode, ok := f.resolveDynamicAxisDim1D(spec.Name); ok {
+					parts[i] = dimNode
+					resolved = true
+				}
+			}
+			if !resolved {
+				return nil, errors.Errorf("DynamicBroadcastInDim: axis %d requires a non-nil Value node or known dynamic axis %q", i, spec.Name)
 			}
 		}
 	}
@@ -1239,7 +1258,7 @@ func (f *Function) Pad(x, fillValue compute.Value, axesConfig ...compute.PadAxis
 			return nil, err
 		}
 
-		paddedExpandedShape := shapes.Make(curr.shape.DType, paddedExpandedDims...)
+		var paddedExpandedShape shapes.Shape
 		if curr.shape.IsDynamic() {
 			axisNames := make([]string, len(paddedExpandedDims))
 			for k, d := range paddedExpandedDims {
@@ -1247,7 +1266,9 @@ func (f *Function) Pad(x, fillValue compute.Value, axesConfig ...compute.PadAxis
 					axisNames[k] = xNode.shape.AxisName(expandedToOrig[k])
 				}
 			}
-			paddedExpandedShape = shapes.MakeDynamic(curr.shape.DType, paddedExpandedDims, axisNames)
+			paddedExpandedShape = makeShape(curr.shape.DType, paddedExpandedDims, axisNames)
+		} else {
+			paddedExpandedShape = shapes.Make(curr.shape.DType, paddedExpandedDims...)
 		}
 
 		intPadNode := f.addNode(&Node{
@@ -1351,7 +1372,7 @@ func (f *Function) Pad(x, fillValue compute.Value, axesConfig ...compute.PadAxis
 
 // DynamicIota constructs an ONNX Range node for dynamic/static iotaAxis and broadcasts it to target dimensions.
 func (f *Function) DynamicIota(dtype dtypes.DType, iotaAxis int, dimensions ...compute.DynamicDimensionSpec) (compute.Value, error) {
-	_, err := shapeinference.DynamicIota(dtype, iotaAxis, dimensions, nil)
+	_, err := shapeinference.DynamicIota(dtype, iotaAxis, dimensions, f.KnownDynamicAxisNames())
 	if err != nil {
 		return nil, err
 	}
@@ -1390,13 +1411,22 @@ func (f *Function) DynamicIota(dtype dtypes.DType, iotaAxis int, dimensions ...c
 				return nil, err
 			}
 		}
-	} else if axisSpec.Static > 0 {
+	} else if axisSpec.Name == "" {
 		limitNode, err = MakeScalar(f, axisSpec.Static, rangeDType)
 		if err != nil {
 			return nil, err
 		}
+	} else if dim1DNode, ok := f.resolveDynamicAxisDim1D(axisSpec.Name); ok {
+		limitNode, err = f.ConvertDType(dim1DNode, rangeDType)
+		if err != nil {
+			return nil, err
+		}
+		limitNode, err = f.Reshape(limitNode)
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		return nil, errors.Errorf("DynamicIota: axis %d requires a non-nil Value node or positive Static dimension", iotaAxis)
+		return nil, errors.Errorf("DynamicIota: axis %d requires a non-nil Value node or known dynamic axis %q", iotaAxis, axisSpec.Name)
 	}
 
 	deltaNode, err := MakeScalar(f, 1, rangeDType)
@@ -1441,6 +1471,7 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 	if err != nil {
 		return nil, err
 	}
+	outShape = f.NameAnonymousDynamicAxes(outShape, "#pad")
 
 	rank := xNode.shape.Rank()
 	if rank == 0 {
@@ -1782,4 +1813,111 @@ func (f *Function) CumSum(operand compute.Value, axis int, options compute.CumSu
 	}
 	resNode.shape = outShape
 	return resNode, nil
+}
+
+// NonZero returns row-major coordinates of nonzero elements as an Int64 tensor
+// with shape [count, rank] (or [rank, count] when cfg.Transpose is true).
+func (f *Function) NonZero(operand compute.Value, cfg compute.NonZeroConfig) (compute.Value, error) {
+	xNode, ok := operand.(*Node)
+	if !ok {
+		return nil, errors.New("NonZero: operand must be a valid onnxruntime node")
+	}
+	if xNode.shape.DType.IsComplex() {
+		return nil, errors.Wrapf(compute.ErrNotImplemented, "NonZero does not support complex dtype %s in ONNX backend", xNode.shape.DType)
+	}
+
+	knownAxisNames := f.KnownDynamicAxisNames()
+	if cfg.CountAxisName == "" {
+		for {
+			cfg.CountAxisName = f.UniqueAxisName("#nonzeros")
+			if !knownAxisNames.Has(cfg.CountAxisName) {
+				break
+			}
+		}
+	} else if cfg.CountAxisName != shapes.AnonymousAxis && knownAxisNames.Has(cfg.CountAxisName) {
+		return nil, errors.Errorf("NonZero: count axis name %q is already in use", cfg.CountAxisName)
+	}
+
+	outShape, err := shapeinference.NonZero(xNode.shape, cfg)
+	if err != nil {
+		return nil, errors.Wrap(err, "NonZero shape inference")
+	}
+	knownAxisNames.Insert(cfg.CountAxisName)
+
+	// Convert DTypes that may lack native ONNX Runtime NonZero kernels while preserving exact zero vs non-zero semantics.
+	var nzInput compute.Value = xNode
+	switch xNode.shape.DType {
+	case dtypes.BFloat16:
+		nzInput, err = f.ConvertDType(xNode, dtypes.Float32)
+		if err != nil {
+			return nil, err
+		}
+	case dtypes.Int8, dtypes.Int16, dtypes.Uint16:
+		nzInput, err = f.ConvertDType(xNode, dtypes.Int32)
+		if err != nil {
+			return nil, err
+		}
+	case dtypes.Uint32:
+		nzInput, err = f.ConvertDType(xNode, dtypes.Int64)
+		if err != nil {
+			return nil, err
+		}
+	case dtypes.Uint64:
+		zeroScalar, errZ := f.MakeScalar(uint64(0), dtypes.Uint64)
+		if errZ != nil {
+			return nil, errZ
+		}
+		nzInput, err = f.NotEqual(xNode, zeroScalar)
+		if err != nil {
+			return nil, err
+		}
+	case dtypes.Float64:
+		zeroScalar, errZ := f.MakeScalar(float64(0), dtypes.Float64)
+		if errZ != nil {
+			return nil, errZ
+		}
+		nzInput, err = f.NotEqual(xNode, zeroScalar)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// ONNX NonZero treats 0D scalars like 1D tensors of length 1 (producing shape [1, count] instead of [0, count]).
+	// For scalar inputs, reshape to [1], run NonZero -> [1, count], and slice axis 0 to [0:0] -> [0, count].
+	rank := xNode.shape.Rank()
+	nzRank := rank
+	if rank == 0 {
+		nzInput, err = f.Reshape(nzInput, 1)
+		if err != nil {
+			return nil, err
+		}
+		nzRank = 1
+	}
+
+	// ONNX NonZero produces Int64 of shape [nzRank, count].
+	onnxNZShape := shapes.MakeDynamic(dtypes.Int64, []int{nzRank, shapes.DynamicDim}, []string{"", cfg.CountAxisName})
+	nzNode := f.addNode(&Node{
+		opType: "NonZero",
+		inputs: []*Node{nzInput.(*Node)},
+		shape:  onnxNZShape,
+	})
+
+	var nzVal compute.Value = nzNode
+	if rank == 0 {
+		nzVal, err = f.Slice(nzNode, []int{0, 0}, []int{0, shapes.DynamicDim}, []int{1, 1})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if cfg.Transpose {
+		nzVal.(*Node).shape = outShape
+		return nzVal, nil
+	}
+	res, err := f.Transpose(nzVal, 1, 0)
+	if err != nil {
+		return nil, err
+	}
+	res.(*Node).shape = outShape
+	return res, nil
 }

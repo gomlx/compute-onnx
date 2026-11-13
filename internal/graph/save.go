@@ -139,24 +139,33 @@ func ONNXValueInfoToShape(valInfo *onnx.ValueInfoProto) shapes.Shape {
 
 	var dims []int
 	var axisNames []string
+	hasDynamic := false
 	hasAxisNames := false
 	if tensorType.Shape != nil {
 		dims = make([]int, len(tensorType.Shape.Dim))
 		axisNames = make([]string, len(tensorType.Shape.Dim))
 		for i, d := range tensorType.Shape.Dim {
-			if d.GetDimValue() > 0 {
-				dims[i] = int(d.GetDimValue())
-			} else {
+			switch v := d.GetValue().(type) {
+			case *onnx.TensorShapeProto_Dimension_DimValue:
+				dims[i] = int(v.DimValue)
+			case *onnx.TensorShapeProto_Dimension_DimParam:
 				dims[i] = shapes.DynamicDim
-				if param := d.GetDimParam(); param != "" {
-					axisNames[i] = param
+				hasDynamic = true
+				if v.DimParam != "" {
+					axisNames[i] = v.DimParam
 					hasAxisNames = true
+				} else {
+					axisNames[i] = shapes.AnonymousAxis
 				}
+			default:
+				dims[i] = shapes.DynamicDim
+				axisNames[i] = shapes.AnonymousAxis
+				hasDynamic = true
 			}
 		}
 	}
 
-	if hasAxisNames {
+	if hasDynamic || hasAxisNames {
 		return shapes.MakeDynamic(dtype, dims, axisNames)
 	}
 	return shapes.Make(dtype, dims...)

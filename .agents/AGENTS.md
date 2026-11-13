@@ -102,3 +102,8 @@ github.com/gomlx/compute-onnx/
 ### 4. Concurrency & Thread Locking
 - **OS Thread Locking**: `session.Run()` calls `runtime.LockOSThread()` / `UnlockOSThread()` to prevent the Go runtime scheduler from migrating goroutines between OS threads during low-level CGO runtime execution.
 - **Wrapper Recycling Mutex**: Executable wrapper recycling and buffer finalization are guarded by `mu sync.Mutex`, allowing safe concurrent finalization from Go garbage collection finalizers.
+
+### 5. Dynamic Shapes & Data-Dependent Axis Naming
+- **Unique Axis Names**: `Backend.UniqueAxisName` and `Function.NameAnonymousDynamicAxes` mint unique `#<base>_<id>` axis names (e.g., `#nonzeros_1`, `#conv_2`, `#dot_3`, `#concat_4`, `#pad_5`) for data-dependent and derived anonymous dynamic axes, matching `gobackend` so downstream operations see matching axis identities.
+- **Name-Only Dynamic Dimension Resolution**: `Function` records the first `(node, axis)` source of each named dynamic axis (`dynamicAxisSources`), allowing `BroadcastInDim`, `DynamicBroadcastInDim`, and `DynamicIota` to resolve known dynamic axis names via ONNX `Shape(start=axis, end=axis+1)` when no explicit dimension `Value` is provided.
+- **Anonymous Axes in ONNX**: Explicit `shapes.AnonymousAxis` (`"?"`) dimensions on parameters/IO are encoded as unset `TensorShapeProto.Dimension` entries in ONNX rather than named `DimParam` symbols so independent anonymous axes are never unified by ONNX shape inference.

@@ -31,12 +31,13 @@ func ShapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
 		if d == shapes.DynamicDim {
 			paramName := shape.AxisName(i)
 			if paramName == "" || paramName == shapes.AnonymousAxis {
-				paramName = fmt.Sprintf("axis_%d", i)
-			}
-			onnxDims[i] = &onnx.TensorShapeProto_Dimension{
-				Value: &onnx.TensorShapeProto_Dimension_DimParam{
-					DimParam: paramName,
-				},
+				onnxDims[i] = &onnx.TensorShapeProto_Dimension{}
+			} else {
+				onnxDims[i] = &onnx.TensorShapeProto_Dimension{
+					Value: &onnx.TensorShapeProto_Dimension_DimParam{
+						DimParam: paramName,
+					},
+				}
 			}
 		} else {
 			onnxDims[i] = &onnx.TensorShapeProto_Dimension{

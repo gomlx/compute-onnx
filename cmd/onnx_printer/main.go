@@ -359,14 +359,16 @@ func ShapeFromONNXType(t *protos.TypeProto) (shapes.Shape, bool) {
 			axisNames[i] = ""
 		case *protos.TensorShapeProto_Dimension_DimParam:
 			dims[i] = shapes.DynamicDim
-			axisNames[i] = v.DimParam
 			hasDynamic = true
 			if v.DimParam != "" {
+				axisNames[i] = v.DimParam
 				hasAxisNames = true
+			} else {
+				axisNames[i] = shapes.AnonymousAxis
 			}
 		default:
 			dims[i] = shapes.DynamicDim
-			axisNames[i] = "?"
+			axisNames[i] = shapes.AnonymousAxis
 			hasDynamic = true
 			hasAxisNames = true
 		}

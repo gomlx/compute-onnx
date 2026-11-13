@@ -3,7 +3,6 @@
 package graph
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/gomlx/compute"
@@ -26,10 +25,13 @@ func makeShape(dtype dtypes.DType, dims []int, axisNames []string) shapes.Shape 
 		}
 		for i, d := range dims {
 			if d == shapes.DynamicDim && newNames[i] == "" {
-				newNames[i] = fmt.Sprintf("axis_%d", i)
+				newNames[i] = shapes.AnonymousAxis
 			}
 		}
 		return shapes.MakeDynamic(dtype, dims, newNames)
+	}
+	if len(axisNames) == len(dims) && slices.ContainsFunc(axisNames, func(s string) bool { return s != "" }) {
+		return shapes.Make(dtype, dims...).WithAxisNames(axisNames...)
 	}
 	return shapes.Make(dtype, dims...)
 }

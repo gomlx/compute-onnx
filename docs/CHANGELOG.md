@@ -1,5 +1,13 @@
 # Changelog
 - 2026-11-13:
+  - Implemented `NonZero` (`compute.OpTypeNonZero` in `internal/graph/ops_special.go` and `internal/graph/ops.go`):
+    - Supports both `[count, rank]` (`Transpose: false`, default) and `[rank, count]` (`Transpose: true`) output layouts, 0D scalar inputs, and all numeric/boolean DTypes (with exact zero/non-zero conversions for `BFloat16`, `Int8`, `Int16`, `Uint16`, `Uint32`, `Uint64`, and `Float64`).
+  - Added unique dynamic axis naming (`Backend.UniqueAxisName`, `Function.KnownDynamicAxisNames`, `Function.NameAnonymousDynamicAxes`) matching `gobackend`:
+    - Mints unique `#nonzeros_<id>`, `#conv_<id>`, `#dot_<id>`, `#concat_<id>`, and `#pad_<id>` axis names for data-dependent and derived anonymous dynamic axes so downstream operations share consistent axis identity.
+    - Tracks node/axis sources for known dynamic axis names (`Function.resolveDynamicAxisDim1D`), automatically emitting ONNX `Shape(start=axis, end=axis+1)` nodes when `BroadcastInDim`, `DynamicBroadcastInDim`, or `DynamicIota` reference known dynamic axis names without explicit `Value` nodes.
+  - Fixed dynamic and anonymous (`?`) axis handling in `ConvGeneral`, `ReduceWindow`, `ArgMinMax`, `Pad`, `Slice`, `DynamicReshape`, `DynamicBroadcastInDim`, `DynamicIota`, `ShapeToONNX`, and `ONNXValueInfoToShape` (`internal/graph/`):
+    - Preserved dynamic dimensions and axis names on intermediate NCHW shapes in `ConvGeneral` and `ReduceWindow` (as well as `ArgMinMax` and interior `Pad`), avoiding `shapes.Make` panics when `shapeinference.ConvGeneral` produces dynamic or `shapes.AnonymousAxis` spatial dimensions.
+    - Encoded anonymous dynamic axes (`shapes.AnonymousAxis` / unnamed) as unset `TensorShapeProto.Dimension` entries in ONNX rather than synthetic `axis_<i>` `DimParam` symbols, and round-tripped both anonymous dynamic dimensions and zero-sized static dimensions in `ONNXValueInfoToShape`.
   - Fixed `FusedQuantizedDenseConfig.QuantizedMatmuls` -> `FusedQuantizedDenseConfig.QuantizedMatmul`
 
 - 2026-11-12:
