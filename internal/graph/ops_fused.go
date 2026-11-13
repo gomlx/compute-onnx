@@ -1029,7 +1029,7 @@ func (f *Function) FusedQuantizedDense(x, weight, bias compute.Value, options co
 		WeightQuantization: wqShapes,
 		XQuantization:      xqShapes,
 		OutputQuantization: oqShapes,
-		QuantizedMatmuls:   options.QuantizedMatmuls,
+		QuantizedMatmul:    options.QuantizedMatmul,
 		Activation:         options.Activation,
 		WeightLayout:       options.WeightLayout,
 	})
