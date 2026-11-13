@@ -3,6 +3,7 @@
 package graph
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/gomlx/compute"
@@ -23,6 +24,7 @@ func init() {
 	registerOp(compute.OpTypeFusedScaledDotProductAttention)
 	registerOp(compute.OpTypeFusedAttentionQKVProjection)
 	registerOp(compute.OpTypeFusedQuantizedDense)
+	registerOp(compute.OpTypeFusedTopK)
 }
 
 func broadcastToShape(f *Function, val compute.Value, targetRef *Node) (compute.Value, error) {
@@ -1217,4 +1219,141 @@ func (f *Function) FusedAttentionQKVProjection(
 	}
 
 	return queryRes, keyRes, valueRes, nil
+}
+
+// FusedTopK returns sorted values and Int32 indices of the k largest (or
+// smallest when cfg.Smallest is true) elements along cfg.Axis.
+func (f *Function) FusedTopK(operand compute.Value, k int, cfg compute.FusedTopKConfig) (values, indices compute.Value, err error) {
+	xNode, ok := operand.(*Node)
+	if !ok {
+		return nil, nil, errors.New("FusedTopK: operand must be a valid onnxruntime node")
+	}
+
+	valuesShape, indicesShape, err := shapeinference.FusedTopK(xNode.shape, k, cfg)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "FusedTopK shape inference")
+	}
+
+	axis := cfg.Axis
+	if axis < 0 {
+		axis += xNode.shape.Rank()
+	}
+
+	kConst, err := f.Constant([]int64{int64(k)}, 1)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "FusedTopK: creating k constant failed")
+	}
+
+	// Widen/map DTypes that lack native ONNX Runtime TopK kernels while preserving exact ordering.
+	origDType := xNode.shape.DType
+	var topKInput compute.Value = xNode
+	var uint64SignBit compute.Value
+	needCastBack := false
+	switch origDType {
+	case dtypes.BFloat16:
+		topKInput, err = f.ConvertDType(xNode, dtypes.Float32)
+		if err != nil {
+			return nil, nil, err
+		}
+		needCastBack = true
+	case dtypes.Uint16:
+		topKInput, err = f.ConvertDType(xNode, dtypes.Int32)
+		if err != nil {
+			return nil, nil, err
+		}
+		needCastBack = true
+	case dtypes.Uint32:
+		topKInput, err = f.ConvertDType(xNode, dtypes.Int64)
+		if err != nil {
+			return nil, nil, err
+		}
+		needCastBack = true
+	case dtypes.Uint64:
+		// Flip the MSB (x ^ (1<<63)) and cast to Int64 for an exact order-preserving bijection [0, MaxUint64] -> [MinInt64, MaxInt64].
+		uint64SignBit, err = f.MakeScalar(uint64(1)<<63, dtypes.Uint64)
+		if err != nil {
+			return nil, nil, err
+		}
+		shifted, errX := f.BitwiseXor(xNode, uint64SignBit)
+		if errX != nil {
+			return nil, nil, errX
+		}
+		topKInput, err = f.ConvertDType(shifted, dtypes.Int64)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	topKInputNode := topKInput.(*Node)
+	topKValuesShape := valuesShape
+	topKValuesShape.DType = topKInputNode.shape.DType
+
+	largestAttr := int64(1)
+	if cfg.Smallest {
+		largestAttr = 0
+	}
+
+	nodeIdx := f.nodeCount + 1
+	valName := fmt.Sprintf("node_%d_values", nodeIdx)
+	idxName := fmt.Sprintf("node_%d_indices", nodeIdx)
+
+	topKNode := f.addNode(&Node{
+		name:        valName,
+		opType:      "TopK",
+		inputs:      []*Node{topKInputNode, kConst.(*Node)},
+		outputNames: []string{valName, idxName},
+		shape:       topKValuesShape,
+		attributes: []*onnx.AttributeProto{
+			{
+				Name: "axis",
+				Type: onnx.AttributeProto_INT,
+				I:    int64(axis),
+			},
+			{
+				Name: "largest",
+				Type: onnx.AttributeProto_INT,
+				I:    largestAttr,
+			},
+			{
+				Name: "sorted",
+				Type: onnx.AttributeProto_INT,
+				I:    1,
+			},
+		},
+	})
+
+	indices64Shape := indicesShape
+	indices64Shape.DType = dtypes.Int64
+	indices64Node := &Node{
+		name:   idxName,
+		inputs: []*Node{topKNode},
+		shape:  indices64Shape,
+	}
+	f.recordDynamicAxisSources(indices64Node)
+
+	indicesVal, err := f.ConvertDType(indices64Node, dtypes.Int32)
+	if err != nil {
+		return nil, nil, err
+	}
+	indicesVal.(*Node).shape = indicesShape
+
+	var valuesVal compute.Value = topKNode
+	if origDType == dtypes.Uint64 {
+		u64Shifted, errC := f.ConvertDType(topKNode, dtypes.Uint64)
+		if errC != nil {
+			return nil, nil, errC
+		}
+		valuesVal, err = f.BitwiseXor(u64Shifted, uint64SignBit)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else if needCastBack {
+		valuesVal, err = f.ConvertDType(topKNode, origDType)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	valuesVal.(*Node).shape = valuesShape
+
+	return valuesVal, indicesVal, nil
 }

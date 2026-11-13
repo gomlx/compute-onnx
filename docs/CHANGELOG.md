@@ -1,5 +1,7 @@
 # Changelog
 - 2026-11-13:
+  - Implemented `FusedTopK` (`compute.OpTypeFusedTopK` in `internal/graph/ops_fused.go`):
+    - Lowers `FusedTopK` (`Axis`, `Smallest`, sorted output, lower-index tie-breaking) to ONNX `TopK` with `Int32` index output across static and dynamic shapes and all sortable numeric DTypes (including order-preserving mappings for `BFloat16`, `Uint16`, `Uint32`, and `Uint64`).
   - Implemented `NonZero` (`compute.OpTypeNonZero` in `internal/graph/ops_special.go` and `internal/graph/ops.go`):
     - Supports both `[count, rank]` (`Transpose: false`, default) and `[rank, count]` (`Transpose: true`) output layouts, 0D scalar inputs, and all numeric/boolean DTypes (with exact zero/non-zero conversions for `BFloat16`, `Int8`, `Int16`, `Uint16`, `Uint32`, `Uint64`, and `Float64`).
   - Added unique dynamic axis naming (`Backend.UniqueAxisName`, `Function.KnownDynamicAxisNames`, `Function.NameAnonymousDynamicAxes`) matching `gobackend`:

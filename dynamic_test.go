@@ -871,4 +871,62 @@ func TestDynamicOps(t *testing.T) {
 			t.Fatalf("got %v, want [0 0]", got)
 		}
 	})
+
+	t.Run("FusedTopKSaveAndLoad", func(t *testing.T) {
+		onBackend := backend.(*Backend)
+		onBackend.SetKeepModelProto(true)
+		defer onBackend.SetKeepModelProto(false)
+
+		b := backend.Builder("topk_save_load")
+		fn := b.Main()
+		p, err := fn.Parameter("x", shapes.MakeDynamic(dtypes.Float32, []int{shapes.DynamicDim, shapes.DynamicDim}, []string{"batch", "vocab"}), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, idxs, err := fn.FusedTopK(p, 2, compute.FusedTopKConfig{Axis: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fn.Return([]compute.Value{idxs}, nil); err != nil {
+			t.Fatal(err)
+		}
+		ex, err := b.Compile()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ex.Finalize()
+
+		var modelBuf bytes.Buffer
+		if err := SaveModel(backend, ex, &modelBuf, nil, nil); err != nil {
+			t.Fatalf("SaveModel: %v", err)
+		}
+		loaded, err := LoadModel(backend, bytes.NewReader(modelBuf.Bytes()))
+		if err != nil {
+			t.Fatalf("LoadModel: %v", err)
+		}
+		defer loaded.Finalize()
+
+		inBuf, err := backend.BufferFromFlatData(0, []float32{
+			1, 5, 5, 2,
+			9, 0, 4, 8,
+			-3, -1, -2, -1,
+		}, shapes.Make(dtypes.Float32, 3, 4))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer inBuf.Finalize()
+		outs, err := loaded.Execute([]compute.Buffer{inBuf}, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer outs[0].Finalize()
+		got := make([]int32, 6)
+		if err := outs[0].ToFlatData(got); err != nil {
+			t.Fatal(err)
+		}
+		want := []int32{1, 2, 0, 3, 1, 3}
+		if !slices.Equal(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
 }
