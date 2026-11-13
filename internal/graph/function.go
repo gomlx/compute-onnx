@@ -201,54 +201,6 @@ func (f *Function) constCacheKey(shape shapes.Shape, flat any) string {
 	return sb.String()
 }
 
-func cloneConstantData(flat any) any {
-	switch s := flat.(type) {
-	case []float32:
-		return slices.Clone(s)
-	case []float64:
-		return slices.Clone(s)
-	case []float16.Float16:
-		return slices.Clone(s)
-	case []bfloat16.BFloat16:
-		return slices.Clone(s)
-	case []int:
-		return slices.Clone(s)
-	case []int64:
-		return slices.Clone(s)
-	case []int32:
-		return slices.Clone(s)
-	case []int16:
-		return slices.Clone(s)
-	case []int8:
-		return slices.Clone(s)
-	case []uint64:
-		return slices.Clone(s)
-	case []uint32:
-		return slices.Clone(s)
-	case []uint16:
-		return slices.Clone(s)
-	case []uint8:
-		return slices.Clone(s)
-	case []bool:
-		return slices.Clone(s)
-	case []complex64:
-		return slices.Clone(s)
-	case []complex128:
-		return slices.Clone(s)
-	default:
-		v := reflect.ValueOf(flat)
-		copied := reflect.MakeSlice(reflect.SliceOf(v.Type().Elem()), v.Len(), v.Len())
-		if v.Kind() == reflect.Slice {
-			reflect.Copy(copied, v)
-		} else {
-			for i := range v.Len() {
-				copied.Index(i).Set(v.Index(i))
-			}
-		}
-		return copied.Interface()
-	}
-}
-
 func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
 	if flat == nil {
 		return nil, errors.New("Constant expects flat to be a slice or array, got nil")
@@ -258,7 +210,12 @@ func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
 		return nil, errors.Errorf("Constant expects flat to be a slice or array, got %T", flat)
 	}
 	if valType.Kind() == reflect.Array {
-		flat = cloneConstantData(flat)
+		v := reflect.ValueOf(flat)
+		copied := reflect.MakeSlice(reflect.SliceOf(valType.Elem()), v.Len(), v.Len())
+		for i := range v.Len() {
+			copied.Index(i).Set(v.Index(i))
+		}
+		flat = copied.Interface()
 	}
 	dtype := dtypes.FromGoType(valType.Elem())
 	shape := shapes.Make(dtype, dims...)
@@ -271,8 +228,13 @@ func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
 		return cached, nil
 	}
 
-	if valType.Kind() == reflect.Slice {
-		flat = cloneConstantData(flat)
+	if _, _, err := dtypes.FromAnySlice(flat); err == nil {
+		flat = dtypes.CloneAnySlice(flat)
+	} else if valType.Kind() == reflect.Slice {
+		v := reflect.ValueOf(flat)
+		copied := reflect.MakeSlice(reflect.SliceOf(valType.Elem()), v.Len(), v.Len())
+		reflect.Copy(copied, v)
+		flat = copied.Interface()
 	}
 	node := &Node{
 		opType:    "Constant",
