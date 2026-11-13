@@ -10,6 +10,42 @@
 - **[`github.com/gomlx/compute`](https://github.com/gomlx/compute)**: The foundational execution and backend abstraction interface (`compute.Backend`, `compute.Builder`, `compute.Function`, `compute.Executable`, `compute.Buffer`). It defines the unified IR graph and operator set that execution backends implement.
 - **`github.com/gomlx/compute-onnx` (This Repository)**: Implements `compute.Backend` by translating GoMLX computation graphs into ONNX Model Protocol Buffers (`onnx.ModelProto`) at runtime and executing them using ONNX Runtime.
 
+### Documentation
+
+- Changes should always be recored in the file `docs/CHANGELOG.md`.
+- Please update `.agents/AGENTS.md` with any information relevant to agents (including yourself) to make their life easier. The file is usually linked to `GEMINI.md` or `CLAUDE.md`.
+
+### Compliance Tests & Benchmarks
+
+- If tests are needed, if they are generic, and can be used by other backends, prefer to place them along the "compliance tests" in `github.com/gomlx/compute/support/backendtest`.
+- Run tests first setting `GOMLX_BACKEND=onnx:cpu`, to force the CPU execution path. Then, if a GPU is available,
+  run also `GOMLX_BACKEND=onnx:cuda`.
+
+### Follow Existing Patterns
+
+Before writing new code, read neighboring files in the same package to understand the established
+patterns (buffer management, dtype dispatch, parallelization, etc.). Reuse existing infrastructure
+rather than writing ad-hoc implementations. When in doubt, match the style and approach of the
+closest existing operation.
+
+### Avoid Large Files (Split Per-Op Implementations > 200 Lines)
+
+Keep source and assembly files focused and easy to browse so it is immediately clear from directory
+listings which operations are implemented:
+- **Avoid monolithic files**: Do not keep appending new operations into a single large file.
+- **Per-op files for implementations > 200 lines**: Whenever an operation (or closely related op family) requires more than ~200 lines of Go, place it in its own dedicated file.
+
+### Copyright Notes
+
+Normal code files are prefixed with the following copyright line:
+
+```
+// Copyright 2023-2026 The GoMLX Authors. SPDX-License-Identifier: Apache-2.0
+```
+
+Auto-generated files don't need a copyright, but should include a comment with the tool use to generate them.
+
+
 ---
 
 ## Package Directory Structure
