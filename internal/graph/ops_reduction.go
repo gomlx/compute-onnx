@@ -3,7 +3,6 @@
 package graph
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/gomlx/compute"
@@ -99,9 +98,7 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 		keepDimsVal = 1
 	}
 
-	f.nodeCount++
-	reduceNode := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
+	reduceNode := f.addNode(&Node{
 		opType: ortOpType,
 		inputs: []*Node{reduceInput, axesConst.(*Node)},
 		shape:  outShape,
@@ -112,8 +109,7 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 				I:    keepDimsVal,
 			},
 		},
-	}
-	f.nodes = append(f.nodes, reduceNode)
+	})
 
 	var finalNode *Node = reduceNode
 	if !keepDims && outShape.Rank() == 0 {
@@ -122,15 +118,11 @@ func (f *Function) Reduce(x compute.Value, opType compute.OpType, axes []int, ke
 			return nil, err
 		}
 
-		f.nodeCount++
-		reshapeNode := &Node{
-			name:   fmt.Sprintf("node_%d", f.nodeCount),
+		finalNode = f.addNode(&Node{
 			opType: "Reshape",
 			inputs: []*Node{reduceNode, newDimsConst.(*Node)},
 			shape:  outShape,
-		}
-		f.nodes = append(f.nodes, reshapeNode)
-		finalNode = reshapeNode
+		})
 	}
 
 	if isUnsigned || isBFloat16MinMax {
@@ -262,9 +254,7 @@ func (f *Function) ArgMinMax(x compute.Value, axis int, outputDType dtypes.DType
 		int64Shape.DType = dtypes.Int64
 	}
 
-	f.nodeCount++
-	argMinMaxNode := &Node{
-		name:   fmt.Sprintf("node_%d", f.nodeCount),
+	argMinMaxNode := f.addNode(&Node{
 		opType: ortOpType,
 		inputs: []*Node{effInput},
 		shape:  int64Shape,
@@ -285,8 +275,7 @@ func (f *Function) ArgMinMax(x compute.Value, axis int, outputDType dtypes.DType
 				I:    0,
 			},
 		},
-	}
-	f.nodes = append(f.nodes, argMinMaxNode)
+	})
 
 	var res compute.Value = argMinMaxNode
 	if needsReshape {

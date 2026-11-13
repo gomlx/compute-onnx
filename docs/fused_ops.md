@@ -22,6 +22,7 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
 | `FusedScaledDotProductAttentionVJP` | Direct backward gradient graph | **Not Implemented** (Falls back to decomposed VJP) |
 | `FusedAttentionQKVProjection` | ONNX `MatMul` + `Slice` (Q, K, V) + `Add` (bias) | **Supported** (for 2D, 3D, 4D input ranks) |
 | `FusedQuantizedDense` | Dequantization (`ConvertDType`, `Sub`, `Mul`) + `FusedDense` | **Supported** (for `QuantLinear`) |
+| `FusedTopK` | Standard ONNX `TopK` (opset 11+) + `Cast` (`Int64` -> `Int32`) | **Supported** |
 | `QuantizedEmbeddingLookup` | Row gather with on-the-fly block dequantization | **Not Implemented** (GGML format unsupported in standard ONNX) |
 
 ---
@@ -128,7 +129,17 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
 
 ---
 
-### 2.8 `QuantizedEmbeddingLookup`
+### 2.8 `FusedTopK`
+- **GoMLX Interface**:
+  ```go
+  FusedTopK(x Value, k int, cfg FusedTopKConfig) (values, indices Value, err error)
+  ```
+- **ONNX Operator Mapping**: Normalizes negative `cfg.Axis` (`axis + rank`), emits standard ONNX `TopK(x, [k])` with `axis`, `largest = 1` (`0` when `cfg.Smallest` is true), and `sorted = 1` (which also guarantees lower-index tie-breaking per the ONNX `TopK` specification), and casts the `Int64` index output to GoMLX's `Int32` index DType.
+- **DType Handling**: Supports static and dynamic shapes across all sortable numeric DTypes. DTypes lacking native ORT CPU/CUDA `TopK` kernels are mapped via order-preserving transformations before `TopK` (`BFloat16` <-> `Float32`, `Uint16` <-> `Int32`, `Uint32` <-> `Int64`, and `Uint64` via sign-bit flip `x ^ (1 << 63)` <-> `Int64`).
+
+---
+
+### 2.9 `QuantizedEmbeddingLookup`
 - **Shortcomings & Limitations**:
   - GGML block quantization formats (`Q4_0`, `Q8_0`, `K-quants`) are native to `llama.cpp` / `ggml` and are not part of standard ONNX specifications. Returns `ErrNotImplemented` to trigger GoMLX's decomposed dequantization path.
 

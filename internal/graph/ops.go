@@ -75,6 +75,7 @@ func init() {
 	registerOp(compute.OpTypeErf)
 	registerOp(compute.OpTypeSign)
 	registerOp(compute.OpTypeLog1p)
+	registerOp(compute.OpTypeIsNaN)
 
 	// Logical
 	registerOp(compute.OpTypeLogicalAnd)
