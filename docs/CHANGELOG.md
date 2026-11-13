@@ -1,4 +1,6 @@
 # Changelog
+- 2026-11-13:
+  - Fixed `FusedQuantizedDenseConfig.QuantizedMatmuls` -> `FusedQuantizedDenseConfig.QuantizedMatmul`
 
 - 2026-11-12:
   - Updated `FusedQuantizedDense` (`internal/graph/ops_fused.go`) to the new `compute.FusedQuantizedDenseConfig` signature, adding full support for scalar, 1D per-channel, and 2D block (`BlockAxis` `0` and `1`, including non-divisible `BlockSize`) `QuantLinear` scales and zero-points across `DenseLayoutInputOutputs` and `DenseLayoutOutputsInput`.
