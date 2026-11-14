@@ -243,7 +243,6 @@ func (f *Function) Concatenate(axis int, inputs ...compute.Value) (compute.Value
 	if err != nil {
 		return nil, err
 	}
-	outShape = f.NameAnonymousDynamicAxes(outShape, "#concat")
 
 	node := &Node{
 		opType: "Concat",
@@ -1187,7 +1186,7 @@ func (f *Function) reshapeWithDynamicFrom(operand *Node, targetDims []int, origX
 			}
 			axisName := origX.shape.AxisName(origAxis)
 			if axisName == "" {
-				axisName = shapes.AnonymousAxis
+				axisName = shapes.UniqueAxisName("#pad")
 			}
 			specs[k] = compute.DynamicDimensionSpec{
 				Name:  axisName,
@@ -1527,7 +1526,6 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 	if err != nil {
 		return nil, err
 	}
-	outShape = f.NameAnonymousDynamicAxes(outShape, "#pad")
 
 	rank := xNode.shape.Rank()
 	if rank == 0 {
@@ -1583,7 +1581,7 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 				}
 				axisName := xNode.shape.AxisName(i)
 				if axisName == "" {
-					axisName = shapes.AnonymousAxis
+					axisName = shapes.UniqueAxisName("#pad")
 				}
 				dimSpec = compute.DynamicDimensionSpec{Name: axisName, Value: dimVal}
 			} else {
@@ -1632,7 +1630,7 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 			paddedExpandedNames = append(paddedExpandedNames, xNode.shape.AxisName(i))
 			if cfg.InteriorValue != nil {
 				paddedExpandedDims = append(paddedExpandedDims, shapes.DynamicDim)
-				paddedExpandedNames = append(paddedExpandedNames, shapes.AnonymousAxis)
+				paddedExpandedNames = append(paddedExpandedNames, shapes.UniqueAxisName("#pad_int"))
 			} else {
 				paddedExpandedDims = append(paddedExpandedDims, 1+cfg.Interior)
 				paddedExpandedNames = append(paddedExpandedNames, "")
@@ -1668,7 +1666,7 @@ func (f *Function) DynamicPad(x, fillValue compute.Value, axesConfig ...compute.
 				}
 				axisName := xNode.shape.AxisName(i)
 				if axisName == "" {
-					axisName = shapes.AnonymousAxis
+					axisName = shapes.UniqueAxisName("#pad_merged")
 				}
 				mergedSpecs[i] = compute.DynamicDimensionSpec{Name: axisName, Value: mergedScalar}
 			}
@@ -1885,12 +1883,12 @@ func (f *Function) NonZero(operand compute.Value, cfg compute.NonZeroConfig) (co
 	knownAxisNames := f.KnownDynamicAxisNames()
 	if cfg.CountAxisName == "" {
 		for {
-			cfg.CountAxisName = f.UniqueAxisName("#nonzeros")
+			cfg.CountAxisName = shapes.UniqueAxisName("#nonzeros")
 			if !knownAxisNames.Has(cfg.CountAxisName) {
 				break
 			}
 		}
-	} else if cfg.CountAxisName != shapes.AnonymousAxis && knownAxisNames.Has(cfg.CountAxisName) {
+	} else if knownAxisNames.Has(cfg.CountAxisName) {
 		return nil, errors.Errorf("NonZero: count axis name %q is already in use", cfg.CountAxisName)
 	}
 

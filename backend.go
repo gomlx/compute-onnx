@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync/atomic"
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/executionprovider"
@@ -53,7 +52,6 @@ type Backend struct {
 	hasBFloat16        bool
 	isFinalized        bool
 	keepModelProto     bool
-	uniqueAxisNameID   atomic.Uint64
 }
 
 // SessionConfig returns the session options configured for this backend.
@@ -209,11 +207,6 @@ func (b *Backend) IsFinalized() bool {
 	return b.isFinalized
 }
 
-// UniqueAxisName returns a name derived from base that is unique across this backend.
-func (b *Backend) UniqueAxisName(base string) string {
-	return fmt.Sprintf("%s_%d", base, b.uniqueAxisNameID.Add(1))
-}
-
 func (b *Backend) Builder(name string) compute.Builder {
 	gb := graph.NewBuilder(name, func(gb *graph.Builder) (compute.Executable, error) {
 		compiled, err := graph.CompileToProto(gb)
@@ -233,7 +226,6 @@ func (b *Backend) Builder(name string) compute.Builder {
 	})
 	gb.SetExecutionProvider(b.executionProvider)
 	gb.SetLogSeverity(b.logSeverity)
-	gb.SetUniqueAxisNameFn(b.UniqueAxisName)
 	return gb
 }
 

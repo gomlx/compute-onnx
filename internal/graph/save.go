@@ -155,11 +155,11 @@ func ONNXValueInfoToShape(valInfo *onnx.ValueInfoProto) shapes.Shape {
 					axisNames[i] = v.DimParam
 					hasAxisNames = true
 				} else {
-					axisNames[i] = shapes.AnonymousAxis
+					axisNames[i] = shapes.UniqueAxisName("#onnx")
 				}
 			default:
 				dims[i] = shapes.DynamicDim
-				axisNames[i] = shapes.AnonymousAxis
+				axisNames[i] = shapes.UniqueAxisName("#onnx")
 				hasDynamic = true
 			}
 		}

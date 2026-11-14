@@ -155,13 +155,12 @@ func TestONNXDynamicAndSerialization(t *testing.T) {
 		builder := backend.Builder("test_anon_dyn")
 		mainFn := builder.Main()
 
-		// Two independent anonymous axes at index 0 must not share a symbolic DimParam in ONNX.
-		anonShape := shapes.MakeDynamic(dtypes.Float32, []int{shapes.DynamicDim}, []string{shapes.AnonymousAxis})
-		p0, err := mainFn.Parameter("a", anonShape, nil)
+		// Two independent generated "#" axes at index 0 must not share a symbolic DimParam in ONNX.
+		p0, err := mainFn.Parameter("a", shapes.MakeDynamic(dtypes.Float32, []int{shapes.DynamicDim}, []string{shapes.UniqueAxisName("a")}), nil)
 		if err != nil {
 			t.Fatalf("Parameter a failed: %v", err)
 		}
-		p1, err := mainFn.Parameter("b", anonShape, nil)
+		p1, err := mainFn.Parameter("b", shapes.MakeDynamic(dtypes.Float32, []int{shapes.DynamicDim}, []string{shapes.UniqueAxisName("b")}), nil)
 		if err != nil {
 			t.Fatalf("Parameter b failed: %v", err)
 		}

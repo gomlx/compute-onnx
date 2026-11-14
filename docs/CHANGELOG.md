@@ -1,5 +1,6 @@
 # Changelog
 - 2026-11-14:
+  - Replaced `shapes.AnonymousAxis` (`"?"`), `Backend.UniqueAxisName`, and `Function.NameAnonymousDynamicAxes` with `shapes.UniqueAxisName`, `shapes.IsGeneratedAxisName`, and `shapes.AxisNamesCompatible` (`backend.go`, `internal/graph/{builder,compile,function,save,ops_*}.go`, `cmd/onnx_printer/main.go`). `#`-prefixed generated axes on ONNX graph inputs/outputs are encoded as unset `TensorShapeProto.Dimension` entries (round-tripped via `shapes.UniqueAxisName("#onnx")`), and `Executable.Execute` skips cross-parameter binding enforcement for `#`-prefixed axes so ORT validates concrete runtime compatibility.
   - Expanded operator and dynamic-shape support for full `hugot` / `onnx-gomlx` compatibility (PR #23):
     - Implemented `IsNaN` (`compute.OpTypeIsNaN` in `internal/graph/ops_unary.go` and `internal/graph/ops.go`) across `Float16`, `BFloat16`, `Float32`, and `Float64`.
     - Added `ConvGeneral` support for `inputDilations > 1` (e.g. transposed convolutions) and negative `paddings` via `Pad` / `DynamicPad`, as well as zero-sized static output shapes (`internal/graph/ops_convgeneral.go`).

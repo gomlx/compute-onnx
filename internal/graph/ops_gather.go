@@ -26,7 +26,7 @@ func makeShape(dtype dtypes.DType, dims []int, axisNames []string) shapes.Shape 
 		}
 		for i, d := range dims {
 			if d == shapes.DynamicDim && newNames[i] == "" {
-				newNames[i] = shapes.AnonymousAxis
+				newNames[i] = shapes.UniqueAxisName("#gather")
 			}
 		}
 		return shapes.MakeDynamic(dtype, dims, newNames)
