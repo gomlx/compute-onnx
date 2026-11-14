@@ -17,6 +17,7 @@ the structure of the codebase and their specific conventions.
 
 - Changes should always be recored in the file `docs/CHANGELOG.md`.
 - Please update `.agents/AGENTS.md` with any information relevant to agents (including yourself) to make their life easier. The file is usually linked to `GEMINI.md` or `CLAUDE.md`.
+- When changing code, if not explicitly asked, always wait for the operator to review the changes before committing them.
 
 ### Compliance Tests & Benchmarks
 
