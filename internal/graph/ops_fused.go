@@ -396,6 +396,9 @@ func (f *Function) FusedLayerNorm(x compute.Value, axes []int, epsilon float64, 
 		normDims := xNode.shape.Dimensions[startAxis:]
 		size := 1
 		for _, d := range normDims {
+			if d < 0 {
+				return nil, errors.Wrapf(compute.ErrNotImplemented, "FusedLayerNorm: dynamic normalized axes %v with nil gamma not supported in ONNX backend", normDims)
+			}
 			size *= d
 		}
 
