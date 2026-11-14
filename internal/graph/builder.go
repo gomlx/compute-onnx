@@ -16,12 +16,23 @@ type CompilerFn func(b *Builder) (compute.Executable, error)
 // Builder implements [compute.Builder] for building ONNX computation graphs.
 type Builder struct {
 	notimplemented.Builder
+	backend           compute.Backend
 	name              string
 	executionProvider executionprovider.Type
 	logSeverity       int
 	compileFn         CompilerFn
 	mainFn            *Function
 	funcs             map[string]*Function
+}
+
+// SetBackend associates the owning compute.Backend with this Builder.
+func (b *Builder) SetBackend(backend compute.Backend) {
+	b.backend = backend
+}
+
+// Backend returns the owning compute.Backend, if set.
+func (b *Builder) Backend() compute.Backend {
+	return b.backend
 }
 
 var _ compute.Builder = (*Builder)(nil)
