@@ -3,10 +3,14 @@
 package graph
 
 import (
+	"slices"
+	"strings"
+
 	"github.com/gomlx/compute"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapeinference"
+	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
 
@@ -24,11 +28,10 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 		return nil, errors.New("inputs must be valid onnxruntime nodes")
 	}
 
-	outShape, err := shapeinference.ConvGeneral(inputNode.shape, kernelNode.shape, axes, strides, paddings, inputDilations, kernelDilations, channelGroupCount, batchGroupCount)
+	rawOutShape, err := shapeinference.ConvGeneral(inputNode.shape, kernelNode.shape, axes, strides, paddings, inputDilations, kernelDilations, channelGroupCount, batchGroupCount)
 	if err != nil {
 		return nil, err
 	}
-	outShape = f.NameAnonymousDynamicAxes(outShape, "#conv")
 
 	rank := inputNode.shape.Rank()
 	numSpatial := rank - 2
@@ -37,18 +40,112 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 	if inputNode.shape.DType == dtypes.BFloat16 {
 		return nil, errors.Wrapf(compute.ErrNotImplemented, "ONNX doesn't support BFloat16 for Conv: standard ONNX Conv schema does not support tensor(bfloat16)")
 	}
-
-	// ONNX Conv operator does not natively support input dilations (atrous/upsampled inputs)
-	// or batch grouping (batchGroupCount > 1).
-	// Return compute.ErrNotImplemented directly (without wrapping) so testutil.SkipIfMissing can detect it.
-	for _, d := range inputDilations {
-		if d > 1 {
-			return nil, errors.Wrap(compute.ErrNotImplemented, "input dilations > 1 not supported by ONNX Conv")
-		}
-	}
+	// ONNX Conv operator does not natively support batch grouping (batchGroupCount > 1).
 	if batchGroupCount > 1 {
 		return nil, errors.Wrap(compute.ErrNotImplemented, "batchGroupCount > 1 not supported by ONNX Conv")
 	}
+
+	// An empty static output has no convolution windows to evaluate.
+	if !rawOutShape.IsDynamic() && rawOutShape.Size() == 0 {
+		return f.Constant(dtypes.MakeAnySlice(rawOutShape.DType, 0), rawOutShape.Dimensions...)
+	}
+
+	// Lower input dilations (atrous/upsampled inputs, e.g. from transposed convolutions) and/or negative
+	// paddings (edge cropping) via Pad / DynamicPad before delegating to standard ONNX Conv.
+	hasInputDilation := slices.ContainsFunc(inputDilations, func(d int) bool { return d > 1 })
+	hasNegativePadding := slices.ContainsFunc(paddings, func(p [2]int) bool { return p[0] < 0 || p[1] < 0 })
+	if hasInputDilation || hasNegativePadding {
+		zero, err := f.MakeScalar(0, inputNode.shape.DType)
+		if err != nil {
+			return nil, err
+		}
+		remPaddings := make([][2]int, numSpatial)
+		copy(remPaddings, paddings)
+
+		dilatedDynamicSpatial := false
+		for i, spatialAxis := range axes.InputSpatial {
+			d := 1
+			if i < len(inputDilations) {
+				d = inputDilations[i]
+			}
+			var p [2]int
+			if i < len(paddings) {
+				p = paddings[i]
+			}
+			if (d > 1 || p[0] < 0 || p[1] < 0) && inputNode.shape.Dimensions[spatialAxis] == shapes.DynamicDim {
+				dilatedDynamicSpatial = true
+			}
+		}
+
+		var padded compute.Value
+		if dilatedDynamicSpatial {
+			dynPadConfig := make([]compute.DynamicPadAxis, rank)
+			for i, spatialAxis := range axes.InputSpatial {
+				d := 1
+				if i < len(inputDilations) {
+					d = inputDilations[i]
+				}
+				if d > 1 {
+					dynPadConfig[spatialAxis].Interior = d - 1
+				}
+				if i < len(paddings) && (paddings[i][0] < 0 || paddings[i][1] < 0) {
+					dynPadConfig[spatialAxis].Start = paddings[i][0]
+					dynPadConfig[spatialAxis].End = paddings[i][1]
+					remPaddings[i] = [2]int{0, 0}
+				}
+				if (d > 1 || dynPadConfig[spatialAxis].Start < 0 || dynPadConfig[spatialAxis].End < 0) &&
+					inputNode.shape.Dimensions[spatialAxis] == shapes.DynamicDim {
+					dynPadConfig[spatialAxis].TargetAxisName = shapes.AnonymousAxis
+				}
+			}
+			padded, err = f.DynamicPad(inputNode, zero, dynPadConfig...)
+		} else {
+			padConfig := make([]compute.PadAxis, rank)
+			for i, spatialAxis := range axes.InputSpatial {
+				if i < len(inputDilations) && inputDilations[i] > 1 {
+					padConfig[spatialAxis].Interior = inputDilations[i] - 1
+				}
+				if i < len(paddings) && (paddings[i][0] < 0 || paddings[i][1] < 0) {
+					padConfig[spatialAxis].Start = paddings[i][0]
+					padConfig[spatialAxis].End = paddings[i][1]
+					remPaddings[i] = [2]int{0, 0}
+				}
+			}
+			padded, err = f.Pad(inputNode, zero, padConfig...)
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		res, err := f.ConvGeneral(padded, kernelNode, axes, strides, remPaddings, nil, kernelDilations, channelGroupCount, batchGroupCount)
+		if err != nil {
+			return nil, err
+		}
+		resNode := res.(*Node)
+		if rawOutShape.AxisNames != nil && resNode.shape.AxisNames != nil {
+			updated := false
+			known := f.KnownDynamicAxisNames()
+			for i, rawName := range rawOutShape.AxisNames {
+				if rawName == shapes.AnonymousAxis && !strings.HasPrefix(resNode.shape.AxisNames[i], "#conv_") {
+					for {
+						cand := f.UniqueAxisName("#conv")
+						if !known.Has(cand) {
+							resNode.shape.AxisNames[i] = cand
+							known.Insert(cand)
+							updated = true
+							break
+						}
+					}
+				}
+			}
+			if updated {
+				f.recordDynamicAxisSources(resNode)
+			}
+		}
+		return resNode, nil
+	}
+
+	outShape := f.NameAnonymousDynamicAxes(rawOutShape, "#conv")
 
 	// 1. Transpose input to NCHW / NCDHW format (Batch, Channels, Spatial...)
 	inputPerm := make([]int, rank)

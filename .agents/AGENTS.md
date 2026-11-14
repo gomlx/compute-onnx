@@ -10,16 +10,22 @@
 - **[`github.com/gomlx/compute`](https://github.com/gomlx/compute)**: The foundational execution and backend abstraction interface (`compute.Backend`, `compute.Builder`, `compute.Function`, `compute.Executable`, `compute.Buffer`). It defines the unified IR graph and operator set that execution backends implement.
 - **`github.com/gomlx/compute-onnx` (This Repository)**: Implements `compute.Backend` by translating GoMLX computation graphs into ONNX Model Protocol Buffers (`onnx.ModelProto`) at runtime and executing them using ONNX Runtime.
 
+When navigating the codebase of any of the related projects, read their .agents/AGENTS.md file to get more information about
+the structure of the codebase and their specific conventions.
+
 ### Documentation
 
 - Changes should always be recored in the file `docs/CHANGELOG.md`.
 - Please update `.agents/AGENTS.md` with any information relevant to agents (including yourself) to make their life easier. The file is usually linked to `GEMINI.md` or `CLAUDE.md`.
+- When changing code, if not explicitly asked, always wait for the operator to review the changes before committing them.
 
 ### Compliance Tests & Benchmarks
 
 - If tests are needed, if they are generic, and can be used by other backends, prefer to place them along the "compliance tests" in `github.com/gomlx/compute/support/backendtest`.
-- Run tests first setting `GOMLX_BACKEND=onnx:cpu`, to force the CPU execution path. Then, if a GPU is available,
-  run also `GOMLX_BACKEND=onnx:cuda`.
+- Run tests in the following fashion:
+  1. `GOMLX_BACKEND=onnx:cpu go test ./...`, to force the CPU execution path.
+  2. `GOMLX_BACKEND=onnx:cuda go test ./...`, if a GPU is available.
+  3. `GOOS=js GOARCH=wasm GOMLX_BACKEND=onnx:wasm go test -exec wasmbrowsertest ./...`, to test wasm (see details in `docs/ort-web.md`)
 
 ### Follow Existing Patterns
 
@@ -141,5 +147,11 @@ github.com/gomlx/compute-onnx/
 
 ### 5. Dynamic Shapes & Data-Dependent Axis Naming
 - **Unique Axis Names**: `Backend.UniqueAxisName` and `Function.NameAnonymousDynamicAxes` mint unique `#<base>_<id>` axis names (e.g., `#nonzeros_1`, `#conv_2`, `#dot_3`, `#concat_4`, `#pad_5`) for data-dependent and derived anonymous dynamic axes, matching `gobackend` so downstream operations see matching axis identities.
-- **Name-Only Dynamic Dimension Resolution**: `Function` records the first `(node, axis)` source of each named dynamic axis (`dynamicAxisSources`), allowing `BroadcastInDim`, `DynamicBroadcastInDim`, and `DynamicIota` to resolve known dynamic axis names via ONNX `Shape(start=axis, end=axis+1)` when no explicit dimension `Value` is provided.
-- **Anonymous Axes in ONNX**: Explicit `shapes.AnonymousAxis` (`"?"`) dimensions on parameters/IO are encoded as unset `TensorShapeProto.Dimension` entries in ONNX rather than named `DimParam` symbols so independent anonymous axes are never unified by ONNX shape inference.
+- **Name-Only Dynamic Dimension Resolution**: `Function` records the first `(node, axis)` source of each named dynamic axis (`dynamicAxisSources`), allowing `BroadcastInDim`, `DynamicBroadcastInDim`, `DynamicReshape`, and `DynamicIota` to resolve known dynamic axis names via ONNX `Shape(start=axis, end=axis+1)` when no explicit dimension `Value` is provided.
+- **Anonymous Axes in ONNX**: Explicit `shapes.AnonymousAxis` (`"?"`) dimensions on parameters/IO are encoded as unset `TensorShapeProto.Dimension` entries in ONNX rather than named `DimParam` symbols so independent anonymous axes are never unified by ONNX shape inference. Avoid decomposing an op on an input with `"?"` into multi-operand GoMLX binary ops on two `"?"`-shaped intermediates (because `shapes.UnifyAxisName("?", "?")` rightly errors); prefer unary/cast wrappers or static broadcast operands.
+
+### 6. Notable Operator Lowering Nuances (`internal/graph`)
+- **`Constant` Defensive Cloning**: `Function.Constant` clones caller-provided slices/arrays on cache miss (`dtypes.CloneAnySlice`), because upstream callers (e.g. `onnx-gomlx`) may mutate or reuse backing buffers before `CompileToProto` serializes `Node.flatValue`.
+- **`ConvGeneral` Input Dilations & Cropping**: `inputDilations > 1` (e.g. transposed convolutions) and negative `paddings` are lowered via `Pad` (static spatial axes) or `DynamicPad` (dynamic spatial axes) before delegating to ONNX `Conv`.
+- **`Gather` Window Expansion**: Non-collapsed mapped axes (`sliceSizes[axis] > 1`) are lowered into a single `GatherND` by adding a static coordinate offset grid `[1..1, W_0..W_{M-1}, V]` to reshaped clamped `startIndices`, avoiding $O(\prod W_m)$ recursive `Gather` + `Concatenate` subgraphs and supporting `shapes.AnonymousAxis` (`"?"`).
+- **Zero-Sized `BroadcastInDim` & `Bool` `Where`**: Static empty `BroadcastInDim` (and `DynamicBroadcastInDim` with static `0` dimensions) bypass ONNX `Expand` (whose constant folding treats a `0` target dim as `1`). `Where` on `dtypes.Bool` casts `onTrue`/`onFalse` through `dtypes.Uint8` around a single ONNX `Where` because ORT lacks a native `Bool` `Where` kernel.

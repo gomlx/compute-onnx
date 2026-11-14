@@ -4,6 +4,7 @@ package graph
 
 import (
 	"math"
+	"slices"
 
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/executionprovider"
@@ -55,6 +56,32 @@ func (f *Function) Where(condition compute.Value, onTrue compute.Value, onFalse 
 	outShape, err := shapeinference.Where(condNode.shape, onTrueNode.shape, onFalseNode.shape)
 	if err != nil {
 		return nil, err
+	}
+
+	// ONNX Runtime lacks a Bool kernel for Where on CPU/CUDA; cast Bool branches through Uint8
+	// so multidirectional broadcasting and anonymous dynamic axes ("?") are preserved in one Where op.
+	if outShape.DType == dtypes.Bool {
+		trueU8, err := f.ConvertDType(onTrueNode, dtypes.Uint8)
+		if err != nil {
+			return nil, err
+		}
+		falseU8, err := f.ConvertDType(onFalseNode, dtypes.Uint8)
+		if err != nil {
+			return nil, err
+		}
+		u8Shape := outShape.Clone()
+		u8Shape.DType = dtypes.Uint8
+		whereU8 := f.addNode(&Node{
+			opType: "Where",
+			inputs: []*Node{condNode, trueU8.(*Node), falseU8.(*Node)},
+			shape:  u8Shape,
+		})
+		res, err := f.ConvertDType(whereU8, dtypes.Bool)
+		if err != nil {
+			return nil, err
+		}
+		res.(*Node).shape = outShape
+		return res, nil
 	}
 
 	node := &Node{
@@ -157,6 +184,12 @@ func (f *Function) BroadcastInDim(x compute.Value, outputShape shapes.Shape, bro
 			}
 		}
 		return f.DynamicBroadcastInDim(xNode, broadcastAxes, specs...)
+	}
+
+	// ONNX Runtime's Expand treats a 0 dimension in target shape as 1 during constant folding.
+	// Return an empty constant directly when the static target shape has zero elements.
+	if outputShape.Size() == 0 {
+		return f.Constant(dtypes.MakeAnySlice(xNode.shape.DType, 0), outputShape.Dimensions...)
 	}
 
 	reshapeDims := make([]int, outputShape.Rank())
@@ -489,7 +522,7 @@ func (f *Function) DynamicReshape(operand compute.Value, dimensions ...compute.D
 		}
 	}
 
-	if !outShape.IsDynamic() && !hasDynamicValue {
+	if !xNode.shape.IsDynamic() && !outShape.IsDynamic() && !hasDynamicValue {
 		return f.Reshape(xNode, outShape.Dimensions...)
 	}
 
@@ -523,6 +556,8 @@ func (f *Function) DynamicReshape(operand compute.Value, dimensions ...compute.D
 				return nil, err
 			}
 			parts[i] = constNode
+		} else if dimNode, ok := f.resolveDynamicAxisDim1D(spec.Name); ok {
+			parts[i] = dimNode
 		} else {
 			// Inferred dimension: -1 in ONNX Reshape
 			constNode, err := f.Constant([]int64{-1}, 1)
@@ -698,6 +733,27 @@ func (f *Function) DynamicBroadcastInDim(operand compute.Value, broadcastAxes []
 	shapeNode, ok := shapeTensorNode.(*Node)
 	if !ok {
 		return nil, errors.New("shape tensor is not a valid onnxruntime node")
+	}
+
+	// If any output dimension is statically zero, reshape an empty 0-element constant directly
+	// to shapeNode instead of using Expand.
+	if slices.Contains(outShape.Dimensions, 0) {
+		emptyConst, err := f.Constant(dtypes.MakeAnySlice(outShape.DType, 0), 0)
+		if err != nil {
+			return nil, err
+		}
+		return f.addNode(&Node{
+			opType: "Reshape",
+			inputs: []*Node{emptyConst.(*Node), shapeNode},
+			shape:  outShape,
+			attributes: []*onnx.AttributeProto{
+				{
+					Name: "allowzero",
+					Type: onnx.AttributeProto_INT,
+					I:    1,
+				},
+			},
+		}), nil
 	}
 
 	reshapedNode, ok := reshaped.(*Node)

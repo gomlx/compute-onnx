@@ -1,4 +1,12 @@
 # Changelog
+- 2026-11-14:
+  - Expanded operator and dynamic-shape support for full `hugot` / `onnx-gomlx` compatibility (PR #23):
+    - Implemented `IsNaN` (`compute.OpTypeIsNaN` in `internal/graph/ops_unary.go` and `internal/graph/ops.go`) across `Float16`, `BFloat16`, `Float32`, and `Float64`.
+    - Added `ConvGeneral` support for `inputDilations > 1` (e.g. transposed convolutions) and negative `paddings` via `Pad` / `DynamicPad`, as well as zero-sized static output shapes (`internal/graph/ops_convgeneral.go`).
+    - Added `Gather` support for `sliceSizes[axis] > 1` and `sliceSizes[axis] == 0` on mapped axes via single-`GatherND` coordinate grid expansion, along with `shapeinference.Gather` validation, dynamic `indexVectorAxis == rank` reshaping, dynamic operand index clamping, and `shapes.AnonymousAxis` (`"?"`) support (`internal/graph/ops_gather.go`).
+    - Added `Where` support for `dtypes.Bool` via `Uint8` casts around ONNX `Where` (preserving multidirectional broadcasting and anonymous dynamic axes), handled zero-sized target shapes in `BroadcastInDim` / `DynamicBroadcastInDim`, and fixed `DynamicReshape` when reshaping dynamic inputs to static target shapes (`internal/graph/ops_special.go`).
+    - Cloned caller slices/arrays in `Function.Constant` (`internal/graph/function.go`, via `dtypes.CloneAnySlice`) so subsequent caller mutations do not corrupt deferred ONNX constant serialization, registered `compute.OpTypeParameter` and `compute.OpTypeConstant` in `internal/graph/ops.go`, and moved generic dynamic-shape tests into `compute/support/backendtest/dynamic.go`.
+
 - 2026-11-13:
   - Implemented `FusedTopK` (`compute.OpTypeFusedTopK` in `internal/graph/ops_fused.go`):
     - Lowers `FusedTopK` (`Axis`, `Smallest`, sorted output, lower-index tie-breaking) to ONNX `TopK` with `Int32` index output across static and dynamic shapes and all sortable numeric DTypes (including order-preserving mappings for `BFloat16`, `Uint16`, `Uint32`, and `Uint64`).

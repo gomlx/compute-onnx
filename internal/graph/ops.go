@@ -32,6 +32,10 @@ func GetSupportedOps() map[compute.OpType]bool {
 }
 
 func init() {
+	// Inputs & Constants
+	registerOp(compute.OpTypeParameter)
+	registerOp(compute.OpTypeConstant)
+
 	// Binary
 	registerOp(compute.OpTypeAdd)
 	registerOp(compute.OpTypeSub)
@@ -75,6 +79,7 @@ func init() {
 	registerOp(compute.OpTypeErf)
 	registerOp(compute.OpTypeSign)
 	registerOp(compute.OpTypeLog1p)
+	registerOp(compute.OpTypeIsNaN)
 
 	// Logical
 	registerOp(compute.OpTypeLogicalAnd)

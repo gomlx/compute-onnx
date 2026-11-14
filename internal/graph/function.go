@@ -202,9 +202,20 @@ func (f *Function) constCacheKey(shape shapes.Shape, flat any) string {
 }
 
 func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
+	if flat == nil {
+		return nil, errors.New("Constant expects flat to be a slice or array, got nil")
+	}
 	valType := reflect.TypeOf(flat)
 	if valType.Kind() != reflect.Slice && valType.Kind() != reflect.Array {
 		return nil, errors.Errorf("Constant expects flat to be a slice or array, got %T", flat)
+	}
+	if valType.Kind() == reflect.Array {
+		v := reflect.ValueOf(flat)
+		copied := reflect.MakeSlice(reflect.SliceOf(valType.Elem()), v.Len(), v.Len())
+		for i := range v.Len() {
+			copied.Index(i).Set(v.Index(i))
+		}
+		flat = copied.Interface()
 	}
 	dtype := dtypes.FromGoType(valType.Elem())
 	shape := shapes.Make(dtype, dims...)
@@ -217,6 +228,14 @@ func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
 		return cached, nil
 	}
 
+	if _, _, err := dtypes.FromAnySlice(flat); err == nil {
+		flat = dtypes.CloneAnySlice(flat)
+	} else if valType.Kind() == reflect.Slice {
+		v := reflect.ValueOf(flat)
+		copied := reflect.MakeSlice(reflect.SliceOf(valType.Elem()), v.Len(), v.Len())
+		reflect.Copy(copied, v)
+		flat = copied.Interface()
+	}
 	node := &Node{
 		opType:    "Constant",
 		shape:     shape,

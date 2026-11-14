@@ -189,3 +189,32 @@ func (f *Function) Erf(x compute.Value) (compute.Value, error) {
 func (f *Function) Sign(x compute.Value) (compute.Value, error) {
 	return f.addUnaryOp(compute.OpTypeSign, "Sign", x)
 }
+
+func (f *Function) IsNaN(x compute.Value) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("IsNaN: input must be a valid onnxruntime node")
+	}
+	if !xNode.shape.DType.IsFloat() {
+		return nil, errors.Errorf("IsNaN requires a float input, got %s", xNode.shape.DType)
+	}
+
+	inNode := xNode
+	// ONNX Runtime lacks IsNaN kernels for Float64 and BFloat16 on some providers.
+	// Casting to Float32 preserves IEEE-754 NaN-ness (finite overflows map to ±Inf, never NaN).
+	if xNode.shape.DType == dtypes.Float64 || xNode.shape.DType == dtypes.BFloat16 {
+		x32, err := f.ConvertDType(xNode, dtypes.Float32)
+		if err != nil {
+			return nil, err
+		}
+		inNode = x32.(*Node)
+	}
+
+	outShape := xNode.shape.Clone()
+	outShape.DType = dtypes.Bool
+	return f.addNode(&Node{
+		opType: "IsNaN",
+		inputs: []*Node{inNode},
+		shape:  outShape,
+	}), nil
+}
