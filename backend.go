@@ -224,6 +224,7 @@ func (b *Backend) Builder(name string) compute.Builder {
 
 		return b.createExecutable(compiled.ModelBytes, compiled.InputNames, compiled.InputShapes, compiled.OutputNames, compiled.OutputShapes, compiled.Model)
 	})
+	gb.SetBackend(b)
 	gb.SetExecutionProvider(b.executionProvider)
 	gb.SetLogSeverity(b.logSeverity)
 	return gb

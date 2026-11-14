@@ -191,6 +191,16 @@ func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
 		reflect.Copy(copied, v)
 		flat = copied.Interface()
 	}
+	return f.addConstantNode(shape, key, flat), nil
+}
+
+func (f *Function) addConstantNode(shape shapes.Shape, key string, flat any) *Node {
+	if f.constCache == nil {
+		f.constCache = make(map[string]*Node)
+	}
+	if cached, ok := f.constCache[key]; ok {
+		return cached
+	}
 	node := &Node{
 		opType:    "Constant",
 		shape:     shape,
@@ -198,7 +208,50 @@ func (f *Function) Constant(flat any, dims ...int) (compute.Value, error) {
 	}
 	n := f.addNode(node)
 	f.constCache[key] = n
-	return n, nil
+	return n
+}
+
+func (f *Function) ConstantFromBuffer(buf compute.Buffer, donate bool) (compute.Value, error) {
+	if buf == nil {
+		return nil, errors.New("ConstantFromBuffer: buffer is nil")
+	}
+	if b := f.builder.Backend(); b != nil && buf.Backend() != nil && buf.Backend() != b {
+		return nil, errors.Errorf("ConstantFromBuffer: buffer belongs to a different backend (%s != %s)",
+			buf.Backend().Name(), b.Name())
+	}
+	devNum, err := buf.DeviceNum()
+	if err != nil {
+		return nil, errors.WithMessage(err, "ConstantFromBuffer: DeviceNum")
+	}
+	if devNum != 0 {
+		return nil, errors.Errorf("ConstantFromBuffer: unsupported deviceNum %d", devNum)
+	}
+	shape, err := buf.Shape()
+	if err != nil {
+		return nil, errors.WithMessage(err, "ConstantFromBuffer: Shape")
+	}
+	var flat any
+	if shape.IsZeroSize() {
+		flat = dtypes.MakeAnySlice(shape.DType, 0)
+	} else {
+		directFlat, directErr := buf.Data()
+		if directErr == nil && directFlat != nil {
+			// Clone before buf.Finalize() or caller mutation can invalidate ORT-owned host memory.
+			flat = dtypes.CloneAnySlice(directFlat)
+		} else {
+			flat = dtypes.MakeAnySlice(shape.DType, shape.Size())
+			if err := buf.ToFlatData(flat); err != nil {
+				return nil, errors.WithMessage(err, "ConstantFromBuffer: ToFlatData")
+			}
+		}
+	}
+	if donate {
+		if err := buf.Finalize(); err != nil {
+			return nil, errors.WithMessage(err, "ConstantFromBuffer: Finalize donated buffer")
+		}
+	}
+	key := f.constCacheKey(shape, flat)
+	return f.addConstantNode(shape, key, flat), nil
 }
 
 // MakeScalar constructs a 0D scalar constant tensor for the given value and DType.
