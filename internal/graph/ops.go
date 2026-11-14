@@ -32,6 +32,10 @@ func GetSupportedOps() map[compute.OpType]bool {
 }
 
 func init() {
+	// Inputs & Constants
+	registerOp(compute.OpTypeParameter)
+	registerOp(compute.OpTypeConstant)
+
 	// Binary
 	registerOp(compute.OpTypeAdd)
 	registerOp(compute.OpTypeSub)
