@@ -364,11 +364,11 @@ func ShapeFromONNXType(t *protos.TypeProto) (shapes.Shape, bool) {
 				axisNames[i] = v.DimParam
 				hasAxisNames = true
 			} else {
-				axisNames[i] = shapes.AnonymousAxis
+				axisNames[i] = shapes.UniqueAxisName("#onnx")
 			}
 		default:
 			dims[i] = shapes.DynamicDim
-			axisNames[i] = shapes.AnonymousAxis
+			axisNames[i] = shapes.UniqueAxisName("#onnx")
 			hasDynamic = true
 			hasAxisNames = true
 		}

@@ -30,7 +30,7 @@ func ShapeToONNX(shape shapes.Shape) *onnx.TensorShapeProto {
 	for i, d := range dims {
 		if d == shapes.DynamicDim {
 			paramName := shape.AxisName(i)
-			if paramName == "" || paramName == shapes.AnonymousAxis {
+			if paramName == "" {
 				onnxDims[i] = &onnx.TensorShapeProto_Dimension{}
 			} else {
 				onnxDims[i] = &onnx.TensorShapeProto_Dimension{

@@ -3,9 +3,6 @@
 package graph
 
 import (
-	"fmt"
-	"sync/atomic"
-
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute-onnx/internal/executionprovider"
 	"github.com/gomlx/compute/notimplemented"
@@ -23,8 +20,6 @@ type Builder struct {
 	executionProvider executionprovider.Type
 	logSeverity       int
 	compileFn         CompilerFn
-	uniqueAxisNameFn  func(base string) string
-	uniqueAxisNameID  atomic.Uint64
 	mainFn            *Function
 	funcs             map[string]*Function
 }
@@ -83,22 +78,6 @@ func (b *Builder) SetLogSeverity(severity int) {
 // LogSeverity returns the log severity level for the builder.
 func (b *Builder) LogSeverity() int {
 	return b.logSeverity
-}
-
-// SetUniqueAxisNameFn configures the callback used to mint unique dynamic axis names.
-func (b *Builder) SetUniqueAxisNameFn(fn func(base string) string) {
-	b.uniqueAxisNameFn = fn
-}
-
-// UniqueAxisName returns a name derived from base that is unique across the backend/builder.
-func (b *Builder) UniqueAxisName(base string) string {
-	if b != nil && b.uniqueAxisNameFn != nil {
-		return b.uniqueAxisNameFn(base)
-	}
-	if b != nil {
-		return fmt.Sprintf("%s_%d", base, b.uniqueAxisNameID.Add(1))
-	}
-	return fmt.Sprintf("%s_1", base)
 }
 
 // Functions returns all registered functions in the builder.

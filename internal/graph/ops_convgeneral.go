@@ -95,7 +95,7 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 				}
 				if (d > 1 || dynPadConfig[spatialAxis].Start < 0 || dynPadConfig[spatialAxis].End < 0) &&
 					inputNode.shape.Dimensions[spatialAxis] == shapes.DynamicDim {
-					dynPadConfig[spatialAxis].TargetAxisName = shapes.AnonymousAxis
+					dynPadConfig[spatialAxis].TargetAxisName = shapes.UniqueAxisName("#pad")
 				}
 			}
 			padded, err = f.DynamicPad(inputNode, zero, dynPadConfig...)
@@ -126,16 +126,10 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 			updated := false
 			known := f.KnownDynamicAxisNames()
 			for i, rawName := range rawOutShape.AxisNames {
-				if rawName == shapes.AnonymousAxis && !strings.HasPrefix(resNode.shape.AxisNames[i], "#conv_") {
-					for {
-						cand := f.UniqueAxisName("#conv")
-						if !known.Has(cand) {
-							resNode.shape.AxisNames[i] = cand
-							known.Insert(cand)
-							updated = true
-							break
-						}
-					}
+				if strings.HasPrefix(rawName, "#conv_") && !strings.HasPrefix(resNode.shape.AxisNames[i], "#conv_") {
+					resNode.shape.AxisNames[i] = rawName
+					known.Insert(rawName)
+					updated = true
 				}
 			}
 			if updated {
@@ -145,7 +139,7 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 		return resNode, nil
 	}
 
-	outShape := f.NameAnonymousDynamicAxes(rawOutShape, "#conv")
+	outShape := rawOutShape
 
 	// 1. Transpose input to NCHW / NCDHW format (Batch, Channels, Spatial...)
 	inputPerm := make([]int, rank)

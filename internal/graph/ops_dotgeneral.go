@@ -71,7 +71,6 @@ func (f *Function) DotGeneral(
 	if err != nil {
 		return nil, err
 	}
-	outShape = f.NameAnonymousDynamicAxes(outShape, "#dot")
 
 	// 2. Generate Einsum equation
 	charPool := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
