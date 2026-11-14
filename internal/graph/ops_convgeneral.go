@@ -312,6 +312,13 @@ func (f *Function) ConvGeneral(input, kernel compute.Value, axes compute.Convolv
 	}
 
 	if needCastToFloat32 {
+		if origDType.IsInt() {
+			var errR error
+			finalVal, errR = f.Round(finalVal)
+			if errR != nil {
+				return nil, errR
+			}
+		}
 		return f.ConvertDType(finalVal, origDType)
 	}
 

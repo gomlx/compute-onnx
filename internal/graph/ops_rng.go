@@ -43,16 +43,79 @@ func (f *Function) RNGBitGenerator(state compute.Value, shape shapes.Shape) (new
 		return nil, nil, err
 	}
 
-	size := shape.Size()
-	if size == 0 {
-		// Return original state and empty tensor
-		return state, stateNode, nil
-	}
+	var iotaVal compute.Value
+	var sizeUint64 compute.Value
+	var dynSpecs []compute.DynamicDimensionSpec
 
-	// 1. Generate 1D sequence of counters: iotaVal = [0, 1, 2, ..., size-1]
-	iotaVal, err := f.Iota(shapes.Make(dtypes.Uint64, size), 0)
-	if err != nil {
-		return nil, nil, err
+	if shape.IsDynamic() {
+		dynSpecs = make([]compute.DynamicDimensionSpec, shape.Rank())
+		staticProd := int64(1)
+		var dynSizeInt64 compute.Value
+		for i, dim := range shape.Dimensions {
+			if dim != shapes.DynamicDim {
+				dynSpecs[i] = compute.DynamicDimensionSpec{Static: dim}
+				staticProd *= int64(dim)
+				continue
+			}
+			axisName := shape.AxisName(i)
+			dim1D, ok := f.resolveDynamicAxisDim1D(axisName)
+			if !ok {
+				return nil, nil, errors.Errorf("RNGBitGenerator: unknown dynamic axis %q at axis %d of shape %s", axisName, i, shape)
+			}
+			dimScalar, err := f.Reshape(dim1D)
+			if err != nil {
+				return nil, nil, err
+			}
+			dynSpecs[i] = compute.DynamicDimensionSpec{Name: axisName, Value: dimScalar}
+			if dynSizeInt64 == nil {
+				dynSizeInt64 = dimScalar
+			} else {
+				dynSizeInt64, err = f.Mul(dynSizeInt64, dimScalar)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		staticConst, err := f.Constant([]int64{staticProd})
+		if err != nil {
+			return nil, nil, err
+		}
+		totalSizeInt64 := staticConst
+		if dynSizeInt64 != nil {
+			totalSizeInt64, err = f.Mul(dynSizeInt64, staticConst)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		iotaVal, err = f.DynamicIota(dtypes.Uint64, 0, compute.DynamicDimensionSpec{
+			Name:  shapes.UniqueAxisName("#rng_flat"),
+			Value: totalSizeInt64,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		sizeUint64, err = f.ConvertDType(totalSizeInt64, dtypes.Uint64)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		size := shape.Size()
+		if size == 0 {
+			emptyVal, err := f.Constant(dtypes.MakeAnySlice(shape.DType, 0), shape.Dimensions...)
+			if err != nil {
+				return nil, nil, err
+			}
+			return state, emptyVal, nil
+		}
+		// 1. Generate 1D sequence of counters: iotaVal = [0, 1, 2, ..., size-1]
+		iotaVal, err = f.Iota(shapes.Make(dtypes.Uint64, size), 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		sizeUint64, err = f.Constant([]uint64{uint64(size)})
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// counters = iotaVal + counterLow
@@ -129,29 +192,32 @@ func (f *Function) RNGBitGenerator(state compute.Value, shape shapes.Shape) (new
 	}
 
 	// 4. Reshape flatValues to the final shape
-	dims := shape.Dimensions
-	if len(dims) == 0 {
-		dims = []int{1}
-	}
-	reshapedValues, err := f.Reshape(castedValues, dims...)
-	if err != nil {
-		return nil, nil, err
-	}
-	values = reshapedValues
-	if shape.Rank() == 0 {
-		// Reshape [1] back to [] (scalar)
-		values, err = f.Reshape(reshapedValues)
+	if shape.IsDynamic() {
+		values, err = f.DynamicReshape(castedValues, dynSpecs...)
 		if err != nil {
 			return nil, nil, err
+		}
+	} else {
+		dims := shape.Dimensions
+		if len(dims) == 0 {
+			dims = []int{1}
+		}
+		reshapedValues, err := f.Reshape(castedValues, dims...)
+		if err != nil {
+			return nil, nil, err
+		}
+		values = reshapedValues
+		if shape.Rank() == 0 {
+			// Reshape [1] back to [] (scalar)
+			values, err = f.Reshape(reshapedValues)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 
 	// 5. Update RNG state: counter_low = counter_low + size
-	sizeConst, err := f.Constant([]uint64{uint64(size)})
-	if err != nil {
-		return nil, nil, err
-	}
-	newCounterLow, err := f.Add(counterLow, sizeConst)
+	newCounterLow, err := f.Add(counterLow, sizeUint64)
 	if err != nil {
 		return nil, nil, err
 	}
