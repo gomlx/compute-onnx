@@ -10,6 +10,9 @@
 - **[`github.com/gomlx/compute`](https://github.com/gomlx/compute)**: The foundational execution and backend abstraction interface (`compute.Backend`, `compute.Builder`, `compute.Function`, `compute.Executable`, `compute.Buffer`). It defines the unified IR graph and operator set that execution backends implement.
 - **`github.com/gomlx/compute-onnx` (This Repository)**: Implements `compute.Backend` by translating GoMLX computation graphs into ONNX Model Protocol Buffers (`onnx.ModelProto`) at runtime and executing them using ONNX Runtime.
 
+When navigating the codebase of any of the related projects, read their .agents/AGENTS.md file to get more information about
+the structure of the codebase and their specific conventions.
+
 ### Documentation
 
 - Changes should always be recored in the file `docs/CHANGELOG.md`.
