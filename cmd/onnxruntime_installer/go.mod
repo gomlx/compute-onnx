@@ -2,7 +2,7 @@ module github.com/gomlx/compute-onnx/cmd/onnxruntime_installer
 
 go 1.27
 
-require github.com/gomlx/compute-onnx v0.1.30-0.20261114211452-91c374548e27
+require github.com/gomlx/compute-onnx v0.1.30
 
 require (
 	github.com/go-logr/logr v1.4.3 // indirect
