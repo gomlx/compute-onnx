@@ -55,4 +55,5 @@ jobs:
           GOARCH: wasm
           GOMLX_BACKEND: onnx:wasm
         run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           go test -exec wasmbrowsertest ./...
