@@ -214,6 +214,9 @@ func TestFindMigraphxWheelURL(t *testing.T) {
 }
 
 func TestInstallMigraphxWithCustomTarget(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skipf("MIGraphX wheels are only supported on linux/amd64 (got %s/%s)", runtime.GOOS, runtime.GOARCH)
+	}
 	targetDir := t.TempDir()
 	libPath, err := InstallMigraphx("7.2.4", targetDir, true)
 	if err != nil {
