@@ -7,6 +7,7 @@ package onnxruntime
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -98,13 +99,19 @@ func TestGetAssetURLWithCudaVersion(t *testing.T) {
 		t.Errorf("GetAssetURL CPU returned empty URL")
 	}
 
-	// Test CUDA asset URL with explicit CUDA version "12"
-	urlCUDA12, err := GetAssetURL("1.27.0", true, "12")
-	if err != nil {
-		t.Fatalf("GetAssetURL CUDA 12 failed: %+v", err)
-	}
-	if urlCUDA12 == "" {
-		t.Errorf("GetAssetURL CUDA 12 returned empty URL")
+	// Test CUDA asset URL with explicit CUDA version "12" (supported on linux/amd64 and windows/amd64).
+	if runtime.GOARCH == "amd64" && (runtime.GOOS == "linux" || runtime.GOOS == "windows") {
+		urlCUDA12, err := GetAssetURL("1.27.0", true, "12")
+		if err != nil {
+			t.Fatalf("GetAssetURL CUDA 12 failed: %+v", err)
+		}
+		if urlCUDA12 == "" {
+			t.Errorf("GetAssetURL CUDA 12 returned empty URL")
+		}
+	} else {
+		if _, err := GetAssetURL("1.27.0", true, "12"); err == nil {
+			t.Errorf("expected GetAssetURL CUDA 12 to fail on %s/%s", runtime.GOOS, runtime.GOARCH)
+		}
 	}
 }
 
