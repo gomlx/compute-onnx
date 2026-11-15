@@ -503,6 +503,7 @@ var _ compute.Buffer = (*Buffer)(nil)
 
 // NewBuffer creates a new Buffer.
 func NewBuffer(backend compute.Backend, wrapper OrtTensorWrapper, shape shapes.Shape, device compute.DeviceNum, executionProvider executionprovider.Type, exec *Executable) *Buffer {
+	shape.AxisNames = nil
 	return &Buffer{
 		backend:           backend,
 		wrapper:           wrapper,

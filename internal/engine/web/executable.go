@@ -228,6 +228,7 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 
 		sh := e.outputShapes[i]
 		actualShape := sh
+		actualShape.AxisNames = nil
 		if sh.IsDynamic() {
 			dimsVal := outTensor.Get("dims")
 			numDims := dimsVal.Length()

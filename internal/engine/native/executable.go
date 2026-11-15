@@ -433,6 +433,7 @@ func (e *Executable) executeCUDA(clone *sessionClone, ortInputs []ort.Value, inp
 	for i, sh := range e.outputShapes {
 		val := ort.WrapRawOrtValue(outputValues[i])
 		actualShape := sh
+		actualShape.AxisNames = nil
 		if sh.IsDynamic() {
 			boundShape, err := ort.GetOrtValueShape(outputValues[i])
 			if err != nil {
@@ -578,6 +579,7 @@ func (e *Executable) executeDefault(clone *sessionClone, inputs []compute.Buffer
 	outBuffers := make([]compute.Buffer, len(e.outputShapes))
 	for i, sh := range e.outputShapes {
 		actualShape := sh
+		actualShape.AxisNames = nil
 		if sh.IsDynamic() || !preallocOutputs {
 			var err error
 			outWrappers[i], err = WrapOrtValue(ortOutputs[i], sh)

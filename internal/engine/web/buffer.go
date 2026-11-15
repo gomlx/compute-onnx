@@ -82,6 +82,7 @@ var _ compute.Buffer = (*Buffer)(nil)
 
 // NewBuffer creates a new web Buffer.
 func NewBuffer(backend compute.Backend, wrapper *WebTensorWrapper, shape shapes.Shape, device compute.DeviceNum, isShared bool, exec *Executable) *Buffer {
+	shape.AxisNames = nil
 	return &Buffer{
 		backend:    backend,
 		wrapper:    wrapper,
