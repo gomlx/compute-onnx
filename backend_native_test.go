@@ -253,6 +253,12 @@ func TestConvGeneralFloat64(t *testing.T) {
 	})
 
 	t.Run("CUDA", func(t *testing.T) {
+		if !cuda.HasNvidiaGPU() {
+			t.Skip("No NVIDIA GPU available, skipping CUDA test")
+		}
+		if err := cuda.CheckCUDAAndCUDNN(); err != nil {
+			t.Skipf("CUDA/cuDNN not available, skipping CUDA test: %v", err)
+		}
 		b, err := New("cuda")
 		if err != nil {
 			t.Fatalf("Failed to create CUDA backend: %+v", err)
