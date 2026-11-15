@@ -2,6 +2,10 @@
 
 [![Documentation](https://img.shields.io/badge/docs-gomlx.github.io-blue.svg)](https://gomlx.github.io/)
 [![Sponsor GoMLX](https://img.shields.io/badge/Sponsor-GoMLX-white?logo=github&style=flat-square)](https://github.com/gomlx/gomlx/blob/main/README.md#-support-the-project)
+<br/>
+[![Linux/amd64 & WASM Tests](https://github.com/gomlx/compute-onnx/actions/workflows/linux_amd64_tests.yaml/badge.svg)](https://github.com/gomlx/compute-onnx/actions/workflows/linux_amd64_tests.yaml)
+[![Linux/arm64 Tests](https://github.com/gomlx/compute-onnx/actions/workflows/linux_arm64_tests.yaml/badge.svg)](https://github.com/gomlx/compute-onnx/actions/workflows/linux_arm64_tests.yaml)
+[![Darwin/arm64 Tests](https://github.com/gomlx/compute-onnx/actions/workflows/darwin_tests.yaml/badge.svg)](https://github.com/gomlx/compute-onnx/actions/workflows/darwin_tests.yaml)
 
 **ONNX Runtime** based compute backend for GoMLX.
 
