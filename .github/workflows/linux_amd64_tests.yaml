@@ -1,0 +1,58 @@
+name: "Tests(linux/amd64, ubuntu latest)"
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  deployments: read
+  issues: read
+  discussions: read
+  packages: read
+  pages: read
+  pull-requests: read
+  repository-projects: read
+  security-events: read
+  statuses: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.x"
+
+      - name: Test with AutoInstall ONNX Runtime (CPU)
+        env:
+          GOMLX_BACKEND: onnx:cpu
+        run: |
+          go test . -v -count=1
+
+      - name: Test Native (CPU)
+        env:
+          GOMLX_BACKEND: onnx:cpu
+        run: |
+          go test ./...
+
+      - name: Install wasmbrowsertest
+        run: |
+          go install github.com/agnivade/wasmbrowsertest@master
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Test WASM (wasmbrowsertest)
+        env:
+          GOOS: js
+          GOARCH: wasm
+          GOMLX_BACKEND: onnx:wasm
+        run: |
+          go test -exec wasmbrowsertest ./...
