@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gomlx/compute-onnx/support/onnxruntime"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"google.golang.org/protobuf/proto"
 )
@@ -78,11 +79,15 @@ func createIdentityModel(size int64) []byte {
 func initTestEnvironment() error {
 	path := os.Getenv("ONNXRUNTIME_SHARED_LIBRARY_PATH")
 	if path == "" {
-		home, err := os.UserHomeDir()
+		installDir, err := onnxruntime.GetInstallPath()
 		if err != nil {
 			return err
 		}
-		path = filepath.Join(home, ".local", "lib", "onnxruntime", "libonnxruntime.so")
+		libFilename, err := onnxruntime.GetLibFilename()
+		if err != nil {
+			return err
+		}
+		path = filepath.Join(installDir, libFilename)
 	}
 	SetSharedLibraryPath(path)
 	return InitializeEnvironment()
