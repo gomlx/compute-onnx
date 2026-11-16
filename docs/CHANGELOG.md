@@ -1,4 +1,7 @@
 # Changelog
+- 2026-11-16:
+  - Added GitHub Actions CI workflow `.github/workflows/windows_amd64_tests.yaml` for `windows/amd64`.
+
 - 2026-11-15:
   - Added GitHub Actions CI workflows under `.github/workflows/` for `linux/amd64` (native CPU + WASM via `wasmbrowsertest`), `linux/arm64`, and `darwin/arm64` (`macos-latest`).
   - Cleared `AxisNames` on runtime output/buffer shapes (`internal/engine/{native,web}/{executable,buffer}.go`) so concrete `Buffer.Shape()` values match `shapes.Make(...)` without retaining symbolic dynamic axis names (fixing `TestCompliance/DynamicOps/DynamicRNGBitGenerator`).
