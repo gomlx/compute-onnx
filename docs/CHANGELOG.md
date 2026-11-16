@@ -1,6 +1,7 @@
 # Changelog
 - 2026-11-16:
   - Added GitHub Actions CI workflow `.github/workflows/windows_amd64_tests.yaml` for `windows/amd64`.
+  - Added Windows support in `internal/ort` (`ort_windows.go`, `cuda_copy_windows.go`, `hip_sync_windows.go`, `ORT_API_CALL` in `ort_wrapper.c`, build tags on `cuda_copy.go` and `hip_sync.go`, and cross-platform library path lookup in `ort_test.go`).
 
 - 2026-11-15:
   - Added GitHub Actions CI workflows under `.github/workflows/` for `linux/amd64` (native CPU + WASM via `wasmbrowsertest`), `linux/arm64`, and `darwin/arm64` (`macos-latest`).

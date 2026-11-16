@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef const OrtApiBase* (*OrtGetApiBaseFn)();
+typedef const OrtApiBase* (ORT_API_CALL *OrtGetApiBaseFn)(void);
 
 const OrtApi* GetOrtApi(void* get_api_base_ptr, uint32_t version) {
     OrtGetApiBaseFn get_api_base = (OrtGetApiBaseFn)get_api_base_ptr;
