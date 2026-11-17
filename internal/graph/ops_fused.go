@@ -927,9 +927,9 @@ func (f *Function) FusedScaledDotProductAttentionVJP(
 	return nil, nil, nil, errors.Wrap(compute.ErrNotImplemented, "FusedScaledDotProductAttentionVJP is not implemented for onnxruntime backend")
 }
 
-// QuantizedEmbeddingLookup performs a quantized embedding lookup with on-the-fly dequantization.
-func (f *Function) QuantizedEmbeddingLookup(data, indices compute.Value, dataQuantization *compute.Quantization) (compute.Value, error) {
-	return nil, errors.Wrap(compute.ErrNotImplemented, "QuantizedEmbeddingLookup is not implemented for onnxruntime backend")
+// QuantizedGather performs a quantized row gather (embedding lookup) with on-the-fly unpacking / dequantization.
+func (f *Function) QuantizedGather(x, indices compute.Value, xQuantization *compute.Quantization) (compute.Value, error) {
+	return nil, errors.Wrap(compute.ErrNotImplemented, "QuantizedGather is not implemented for onnxruntime backend")
 }
 
 func quantizationToShapes(opName string, q *compute.Quantization) (*shapeinference.QuantizationShapes, *Node, *Node, error) {

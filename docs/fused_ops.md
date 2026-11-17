@@ -23,7 +23,7 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
 | `FusedAttentionQKVProjection` | ONNX `MatMul` + `Slice` (Q, K, V) + `Add` (bias) | **Supported** (for 2D, 3D, 4D input ranks) |
 | `FusedQuantizedDense` | Dequantization (`ConvertDType`, `Sub`, `Mul`) + `FusedDense` | **Supported** (for `QuantLinear`) |
 | `FusedTopK` | Standard ONNX `TopK` (opset 11+) + `Cast` (`Int64` -> `Int32`) | **Supported** |
-| `QuantizedEmbeddingLookup` | Row gather with on-the-fly block dequantization | **Not Implemented** (GGML format unsupported in standard ONNX) |
+| `QuantizedGather` | Row gather with on-the-fly block dequantization / sub-byte unpacking | **Not Implemented** (delegates to GoMLX decomposed fallback) |
 
 ---
 
@@ -139,9 +139,9 @@ Below is the summary mapping of `compute.Backend` fused operations to ONNX opera
 
 ---
 
-### 2.9 `QuantizedEmbeddingLookup`
+### 2.9 `QuantizedGather`
 - **Shortcomings & Limitations**:
-  - GGML block quantization formats (`Q4_0`, `Q8_0`, `K-quants`) are native to `llama.cpp` / `ggml` and are not part of standard ONNX specifications. Returns `ErrNotImplemented` to trigger GoMLX's decomposed dequantization path.
+  - Not implemented directly in `compute-onnx` (including `xQuantization == nil` sub-byte unpacking, `QuantLinear`, `QuantNF4`, and `QuantGGML`, which uses `llama.cpp` / `ggml` block formats absent from standard ONNX). Returns `ErrNotImplemented` to trigger GoMLX's decomposed path.
 
 ---
 

@@ -259,6 +259,8 @@ func (f *Function) Concatenate(axis int, inputs ...compute.Value) (compute.Value
 	return f.addNode(node), nil
 }
 
+// Slice extracts a slice from x specified by start, limit, and stride.
+// Packed sub-byte dtypes are not supported directly; Bitcast to Uint8 or ConvertDType first.
 func (f *Function) Slice(x compute.Value, start []int, limit []int, stride []int) (compute.Value, error) {
 	xNode, ok := x.(*Node)
 	if !ok {
