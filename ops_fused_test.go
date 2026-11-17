@@ -298,9 +298,9 @@ func TestRNGBitGenerator(t *testing.T) {
 	}
 	defer b.Finalize()
 
-	state := []uint64{42, 0, 0}
+	state := []uint64{42, 0}
 	got, err := testutil.Exec1(b, []any{state}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
-		_, val, err := f.RNGBitGenerator(params[0], shapes.Make(dtypes.Uint64, 4))
+		_, val, err := f.RNGBitGenerator(params[0], shapes.Make(dtypes.Uint64, 4), compute.RNGDefault)
 		return val, err
 	})
 	if err != nil {

@@ -1,5 +1,6 @@
 # Changelog
 - 2026-11-17:
+  - Updated `RNGBitGenerator(state, shape, algorithm)` (`backend.go`, `internal/graph/ops_rng.go`, `ops_fused_test.go`) for `compute.RNGAlgorithm`: supports canonical Steele `RNGSplitMix64` (`DefaultRNGAlgorithm` on standard EPs), OpenXLA-exact `RNGThreeFry` (`ThreeFry2x32-20`), and pure 32-bit `[4]uint32` `ThreeFry2x32-20` as `RNGDefault` on `WebGPU` (avoiding `Uint64` GPU buffers); disabled `OpTypeRNGBitGenerator` capability on `MIGraphX`.
   - Renamed `Function.QuantizedEmbeddingLookup` stub to `QuantizedGather(x, indices, xQuantization)` (`internal/graph/ops_fused.go`, `docs/fused_ops.md`), updated `Slice`/`Gather` comments (`internal/graph/{ops_special,ops_gather}.go`), and bumped `github.com/gomlx/compute` dependency.
 
 - 2026-11-16:
