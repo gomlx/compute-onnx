@@ -13,6 +13,7 @@ import (
 	"github.com/gomlx/compute-onnx/internal/sessionconfig"
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
+	"github.com/gomlx/compute/shapes"
 	"github.com/pkg/errors"
 )
 
@@ -178,6 +179,7 @@ func (b *Backend) Capabilities() compute.Capabilities {
 		// or crash inside MIGraphX. Restrict the advertised capabilities accordingly,
 		// so graphs using unsupported dtypes fail cleanly at compilation time.
 		caps.DynamicAxes = false
+		caps.Operations[compute.OpTypeRNGBitGenerator] = false
 		caps.DTypes[dtypes.Float32] = true
 		caps.DTypes[dtypes.Int32] = true
 		caps.DTypes[dtypes.Int64] = true
@@ -196,6 +198,26 @@ func (b *Backend) Capabilities() compute.Capabilities {
 	caps.DTypes[dtypes.Uint16] = true
 	caps.DTypes[dtypes.Uint32] = true
 	caps.DTypes[dtypes.Uint64] = true
+
+	if b.executionProvider == executionprovider.WebGPU {
+		// WebGPU shaders do not support Uint64 GPU buffers; use pure 32-bit ThreeFry-2x32-20
+		// with a [4]uint32 state for RNGDefault, while keeping explicit Uint64 algorithms
+		// available via WASM fallback when requested.
+		caps.RNGAlgorithms = map[compute.RNGAlgorithm]bool{
+			compute.RNGDefault:    true,
+			compute.RNGThreeFry:   true,
+			compute.RNGSplitMix64: true,
+		}
+		caps.DefaultRNGAlgorithm = compute.RNGDefault
+		caps.DefaultRNGStateShape = shapes.Make(dtypes.Uint32, 4)
+	} else {
+		caps.RNGAlgorithms = map[compute.RNGAlgorithm]bool{
+			compute.RNGDefault:    true,
+			compute.RNGSplitMix64: true,
+			compute.RNGThreeFry:   true,
+		}
+		caps.DefaultRNGAlgorithm = compute.RNGSplitMix64
+	}
 	return caps
 }
 
