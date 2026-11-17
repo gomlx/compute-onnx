@@ -48,6 +48,7 @@ func isIdentityPerm(perm []int) bool {
 
 // Gather gathers slices from operand using coordinates specified by startIndices.
 // It maps the generalized XLA Gather semantics to ONNX GatherND, Reshape, and Transpose.
+// Packed sub-byte dtypes are not supported directly; use QuantizedGather or Bitcast to Uint8 first.
 func (f *Function) Gather(
 	operand compute.Value,
 	startIndices compute.Value,
