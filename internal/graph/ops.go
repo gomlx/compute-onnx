@@ -78,8 +78,10 @@ func init() {
 	registerOp(compute.OpTypeLogistic)
 	registerOp(compute.OpTypeErf)
 	registerOp(compute.OpTypeSign)
+	registerOp(compute.OpTypeExpm1)
 	registerOp(compute.OpTypeLog1p)
 	registerOp(compute.OpTypeIsNaN)
+	registerOp(compute.OpTypeIsFinite)
 
 	// Logical
 	registerOp(compute.OpTypeLogicalAnd)

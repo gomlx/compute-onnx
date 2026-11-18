@@ -4,6 +4,7 @@ package onnxbackend
 
 import (
 	"flag"
+	"math"
 	"os"
 	"testing"
 
@@ -24,6 +25,18 @@ var (
 
 func TestCompliance(t *testing.T) {
 	backendtest.RunAll(t, backend, nil)
+}
+
+func TestIsFiniteNegativeInfinity(t *testing.T) {
+	got, err := testutil.Exec1(backend, []any{float32(math.Inf(-1))}, func(f compute.Function, params []compute.Value) (compute.Value, error) {
+		return f.IsFinite(params[0])
+	})
+	if err != nil {
+		t.Fatalf("Failed to execute IsFinite on negative infinity: %+v", err)
+	}
+	if ok, diff := testutil.IsEqual(false, got); !ok {
+		t.Errorf("IsFinite(-Inf) mismatch:\n%s", diff)
+	}
 }
 
 func init() {
@@ -211,4 +224,5 @@ func TestCPUExecutionOutputs(t *testing.T) {
 		}
 	})
 }
+
 

@@ -64,6 +64,22 @@ func (f *Function) Exp(x compute.Value) (compute.Value, error) {
 	return f.addUnaryOp(compute.OpTypeExp, "Exp", x)
 }
 
+func (f *Function) Expm1(x compute.Value) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("Expm1: input must be a valid onnxruntime node")
+	}
+	expX, err := f.Exp(xNode)
+	if err != nil {
+		return nil, err
+	}
+	one, err := MakeScalar(f, 1, xNode.shape.DType)
+	if err != nil {
+		return nil, err
+	}
+	return f.Sub(expX, one)
+}
+
 func (f *Function) Log(x compute.Value) (compute.Value, error) {
 	return f.addUnaryOp(compute.OpTypeLog, "Log", x)
 }
@@ -217,4 +233,32 @@ func (f *Function) IsNaN(x compute.Value) (compute.Value, error) {
 		inputs: []*Node{inNode},
 		shape:  outShape,
 	}), nil
+}
+
+func (f *Function) IsFinite(x compute.Value) (compute.Value, error) {
+	xNode, ok := x.(*Node)
+	if !ok {
+		return nil, errors.New("IsFinite: input must be a valid onnxruntime node")
+	}
+	if !xNode.shape.DType.IsFloat() {
+		return nil, errors.Errorf("IsFinite requires a float input, got %s", xNode.shape.DType)
+	}
+
+	positiveInfinity, err := MakeScalar(f, math.Inf(1), xNode.shape.DType)
+	if err != nil {
+		return nil, err
+	}
+	negativeInfinity, err := MakeScalar(f, math.Inf(-1), xNode.shape.DType)
+	if err != nil {
+		return nil, err
+	}
+	lessThanPositiveInfinity, err := f.LessThan(xNode, positiveInfinity)
+	if err != nil {
+		return nil, err
+	}
+	greaterThanNegativeInfinity, err := f.GreaterThan(xNode, negativeInfinity)
+	if err != nil {
+		return nil, err
+	}
+	return f.LogicalAnd(lessThanPositiveInfinity, greaterThanNegativeInfinity)
 }
