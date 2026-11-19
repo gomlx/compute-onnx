@@ -13,7 +13,7 @@ It allows GoMLX models to be executed via ONNX Runtime using:
 - **Native Desktop/Server**: CPU, CUDA (NVIDIA GPU), or MIGraphX (AMD ROCm GPU).
 - **WebAssembly / Browser**: WebGPU, CPU (WASM SIMD), WebNN, or WebGL in browsers (see [ORT Web Guide](docs/ort-web.md)).
 
-It supports dynamic shapes and exporting models to `.onnx` files.
+It supports dynamic shapes and exporting models to `.onnx` files. It currently targets **ONNX Opset 21** for broader compatibility across ONNX Runtime versions and execution providers (see [ONNX Opset Targeting & Upgrade Roadmap](docs/Opsets.md)).
 
 ## Example Usage
 
