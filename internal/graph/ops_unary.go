@@ -69,6 +69,7 @@ func (f *Function) Expm1(x compute.Value) (compute.Value, error) {
 	if !ok {
 		return nil, errors.New("Expm1: input must be a valid onnxruntime node")
 	}
+	// ONNX native Expm1 was introduced in Opset 29; compute-onnx targets Opset 21.
 	expX, err := f.Exp(xNode)
 	if err != nil {
 		return nil, err
@@ -90,6 +91,7 @@ func (f *Function) Log1p(x compute.Value) (compute.Value, error) {
 		return nil, errors.New("input must be a valid onnxruntime node")
 	}
 
+	// ONNX native Log1p was introduced in Opset 29; compute-onnx targets Opset 21.
 	var oneConst compute.Value
 	var err error
 	switch xNode.shape.DType {
@@ -244,21 +246,20 @@ func (f *Function) IsFinite(x compute.Value) (compute.Value, error) {
 		return nil, errors.Errorf("IsFinite requires a float input, got %s", xNode.shape.DType)
 	}
 
-	positiveInfinity, err := MakeScalar(f, math.Inf(1), xNode.shape.DType)
+	outShape := xNode.shape.Clone()
+	outShape.DType = dtypes.Bool
+	isInf := f.addNode(&Node{
+		opType: "IsInf",
+		inputs: []*Node{xNode},
+		shape:  outShape,
+	})
+	isNaN, err := f.IsNaN(xNode)
 	if err != nil {
 		return nil, err
 	}
-	negativeInfinity, err := MakeScalar(f, math.Inf(-1), xNode.shape.DType)
+	isNotFinite, err := f.LogicalOr(isInf, isNaN)
 	if err != nil {
 		return nil, err
 	}
-	lessThanPositiveInfinity, err := f.LessThan(xNode, positiveInfinity)
-	if err != nil {
-		return nil, err
-	}
-	greaterThanNegativeInfinity, err := f.GreaterThan(xNode, negativeInfinity)
-	if err != nil {
-		return nil, err
-	}
-	return f.LogicalAnd(lessThanPositiveInfinity, greaterThanNegativeInfinity)
+	return f.LogicalNot(isNotFinite)
 }
