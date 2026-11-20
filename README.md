@@ -9,6 +9,15 @@
 
 **ONNX Runtime** based compute backend for GoMLX.
 
+> [!Note]
+> 
+> Microsoft intentionally made the ONNX Runtime repository -- located at [github.com/microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) --
+> private late on November 17, 2026, as a precaution during an active supply-chain security investigation.
+> It now returns a standard 404 page.
+>
+> This impacts `compute-onnx` because it downloads the latest version of the ONNXRuntime library from GitHub.
+> Also, that means for now all CI tests (Continuous Integration) are broken.
+
 It allows GoMLX models to be executed via ONNX Runtime using:
 - **Native Desktop/Server**: CPU, CUDA (NVIDIA GPU), or MIGraphX (AMD ROCm GPU).
 - **WebAssembly / Browser**: WebGPU, CPU (WASM SIMD), WebNN, or WebGL in browsers (see [ORT Web Guide](docs/ort-web.md)).
