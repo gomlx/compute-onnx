@@ -23,7 +23,7 @@ func TestBufferIsShared(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		buf := NewBuffer(nil, nil, shapes.Make(dtypes.Float32, 1), 0, tc.ep, nil)
+		buf := NewBuffer(nil, nil, nil, shapes.Make(dtypes.Float32, 1), 0, tc.ep, nil)
 		if got := buf.IsShared(); got != tc.wantShared {
 			t.Errorf("Buffer.IsShared() for EP %v = %v, want %v", tc.ep, got, tc.wantShared)
 		}

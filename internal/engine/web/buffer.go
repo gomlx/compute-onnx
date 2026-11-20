@@ -10,6 +10,7 @@ import (
 	"github.com/gomlx/compute"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
+	"github.com/gomlx/compute/support/xsync"
 	"github.com/pkg/errors"
 )
 
@@ -70,27 +71,42 @@ func (w *WebTensorWrapper) CopyFrom(flat any) error {
 
 // Buffer implements [compute.Buffer] for Web / WebAssembly execution.
 type Buffer struct {
-	backend    compute.Backend
-	wrapper    *WebTensorWrapper
-	shape      shapes.Shape
-	device     compute.DeviceNum
-	isShared   bool
-	executable *Executable
+	backend          compute.Backend
+	backendLifecycle *xsync.Lifecycle
+	wrapper          *WebTensorWrapper
+	shape            shapes.Shape
+	device           compute.DeviceNum
+	isShared         bool
+	executable       *Executable
 }
 
 var _ compute.Buffer = (*Buffer)(nil)
 
 // NewBuffer creates a new web Buffer.
-func NewBuffer(backend compute.Backend, wrapper *WebTensorWrapper, shape shapes.Shape, device compute.DeviceNum, isShared bool, exec *Executable) *Buffer {
+func NewBuffer(backend compute.Backend, backendLifecycle *xsync.Lifecycle, wrapper *WebTensorWrapper, shape shapes.Shape, device compute.DeviceNum, isShared bool, exec *Executable) *Buffer {
 	shape.AxisNames = nil
 	return &Buffer{
-		backend:    backend,
-		wrapper:    wrapper,
-		shape:      shape,
-		device:     device,
-		isShared:   isShared,
-		executable: exec,
+		backend:          backend,
+		backendLifecycle: backendLifecycle,
+		wrapper:          wrapper,
+		shape:            shape,
+		device:           device,
+		isShared:         isShared,
+		executable:       exec,
 	}
+}
+
+func (b *Buffer) enterBackend(op string) (bool, error) {
+	if b.backendLifecycle != nil {
+		if !b.backendLifecycle.Enter() {
+			return false, errors.Wrapf(compute.ErrBackendFinalized, "onnxruntime-web: Buffer.%s", op)
+		}
+		return true, nil
+	}
+	if b.backend != nil && b.backend.IsFinalized() {
+		return false, errors.Wrapf(compute.ErrBackendFinalized, "onnxruntime-web: Buffer.%s", op)
+	}
+	return false, nil
 }
 
 func (b *Buffer) Backend() compute.Backend {
@@ -98,6 +114,9 @@ func (b *Buffer) Backend() compute.Backend {
 }
 
 func (b *Buffer) Finalize() error {
+	if b == nil {
+		return nil
+	}
 	if b.wrapper != nil {
 		w := b.wrapper
 		b.wrapper = nil
@@ -107,14 +126,33 @@ func (b *Buffer) Finalize() error {
 }
 
 func (b *Buffer) Shape() (shapes.Shape, error) {
+	if b == nil || b.wrapper == nil {
+		return shapes.Invalid(), errors.New("cannot query shape of finalized buffer")
+	}
+	if b.backend != nil && b.backend.IsFinalized() {
+		return shapes.Invalid(), errors.Wrap(compute.ErrBackendFinalized, "onnxruntime-web: Buffer.Shape")
+	}
 	return b.shape, nil
 }
 
 func (b *Buffer) DeviceNum() (compute.DeviceNum, error) {
+	if b == nil || b.wrapper == nil {
+		return 0, errors.New("cannot query device of finalized buffer")
+	}
+	if b.backend != nil && b.backend.IsFinalized() {
+		return 0, errors.Wrap(compute.ErrBackendFinalized, "onnxruntime-web: Buffer.DeviceNum")
+	}
 	return b.device, nil
 }
 
 func (b *Buffer) ToFlatData(flat any) error {
+	entered, err := b.enterBackend("ToFlatData")
+	if err != nil {
+		return err
+	}
+	if entered {
+		defer b.backendLifecycle.Leave()
+	}
 	if b.wrapper == nil {
 		return errors.New("cannot read from finalized buffer")
 	}
@@ -122,15 +160,25 @@ func (b *Buffer) ToFlatData(flat any) error {
 }
 
 func (b *Buffer) Data() (flat any, err error) {
+	if b.backend != nil && b.backend.IsFinalized() {
+		return nil, errors.Wrap(compute.ErrBackendFinalized, "onnxruntime-web: Buffer.Data")
+	}
 	return nil, errors.New("direct memory access not supported for WebAssembly JS buffers; use ToFlatData")
 }
 
 func (b *Buffer) CopyToDevice(deviceNum compute.DeviceNum) (compute.Buffer, error) {
+	entered, err := b.enterBackend("CopyToDevice")
+	if err != nil {
+		return nil, err
+	}
+	if entered {
+		defer b.backendLifecycle.Leave()
+	}
 	if b.wrapper == nil {
 		return nil, errors.New("cannot copy finalized buffer")
 	}
 	flatSlice := dtypes.MakeAnySlice(b.shape.DType, b.shape.Size())
-	err := b.wrapper.ToFlatData(flatSlice)
+	err = b.wrapper.ToFlatData(flatSlice)
 	if err != nil {
 		return nil, err
 	}
@@ -144,11 +192,12 @@ func (b *Buffer) CopyToDevice(deviceNum compute.DeviceNum) (compute.Buffer, erro
 	}
 	newWrapper := NewWebTensorWrapper(newJSTensor, b.shape)
 	return &Buffer{
-		backend:  b.backend,
-		wrapper:  newWrapper,
-		shape:    b.shape,
-		device:   deviceNum,
-		isShared: false,
+		backend:          b.backend,
+		backendLifecycle: b.backendLifecycle,
+		wrapper:          newWrapper,
+		shape:            b.shape,
+		device:           deviceNum,
+		isShared:         false,
 	}, nil
 }
 

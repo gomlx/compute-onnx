@@ -26,6 +26,16 @@ func TestCompliance(t *testing.T) {
 	backendtest.RunAll(t, backend, nil)
 }
 
+func TestFinalize(t *testing.T) {
+	cfg := ""
+	if b, ok := backend.(*Backend); ok {
+		cfg = b.config
+	}
+	backendtest.TestFinalize(t, func() (compute.Backend, error) {
+		return New(cfg)
+	})
+}
+
 func init() {
 	klog.InitFlags(nil)
 }

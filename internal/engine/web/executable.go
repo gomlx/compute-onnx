@@ -12,22 +12,26 @@ import (
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
+	"github.com/gomlx/compute/support/xsync"
 	"github.com/pkg/errors"
 )
 
 // Executable implements [compute.Executable] for ONNX Runtime Web.
 type Executable struct {
-	backend      compute.Backend
-	session      *Session
-	inputNames   []string
-	inputShapes  []shapes.Shape
-	outputNames  []string
-	outputShapes []shapes.Shape
-	modelProto   *onnx.ModelProto
+	backend          compute.Backend
+	backendLifecycle *xsync.Lifecycle
+	execLifecycle    xsync.Lifecycle
+	untrack          func()
+	session          *Session
+	inputNames       []string
+	inputShapes      []shapes.Shape
+	outputNames      []string
+	outputShapes     []shapes.Shape
+	modelProto       *onnx.ModelProto
 
 	// WebGPU optimization fields
-	isWebGPU       bool
-	gpuDevice      js.Value
+	isWebGPU        bool
+	gpuDevice       js.Value
 	gpuInputBuffers []js.Value
 	gpuInputTensors []js.Value
 }
@@ -35,14 +39,15 @@ type Executable struct {
 var _ compute.Executable = (*Executable)(nil)
 
 // NewExecutable creates a new web Executable.
-func NewExecutable(backend compute.Backend, session *Session,
+func NewExecutable(backend compute.Backend, backendLifecycle *xsync.Lifecycle, session *Session,
 	inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape,
 	modelProto *onnx.ModelProto) *Executable {
 
 	exec := &Executable{
-		backend:      backend,
-		session:      session,
+		backend:          backend,
+		backendLifecycle: backendLifecycle,
+		session:          session,
 		inputNames:   inputNames,
 		inputShapes:  inputShapes,
 		outputNames:  outputNames,
@@ -143,23 +148,52 @@ func (e *Executable) Outputs() (outputShapes []shapes.Shape) {
 	return e.outputShapes
 }
 
+// SetUntrack registers a callback invoked on Finalize to remove this Executable from the parent Backend's tracker.
+func (e *Executable) SetUntrack(fn func()) {
+	e.untrack = fn
+}
+
 // Finalize releases the underlying session and GPU buffers.
 func (e *Executable) Finalize() {
-	if e.session != nil {
-		_ = e.session.Destroy()
-		e.session = nil
+	if e == nil {
+		return
 	}
-	for _, buf := range e.gpuInputBuffers {
-		if !buf.IsUndefined() && !buf.IsNull() {
-			buf.Call("destroy")
+	e.execLifecycle.Finalize(func() {
+		if e.untrack != nil {
+			e.untrack()
+			e.untrack = nil
 		}
-	}
-	e.gpuInputBuffers = nil
-	e.gpuInputTensors = nil
+		if e.session != nil {
+			_ = e.session.Destroy()
+			e.session = nil
+		}
+		for _, buf := range e.gpuInputBuffers {
+			if !buf.IsUndefined() && !buf.IsNull() {
+				buf.Call("destroy")
+			}
+		}
+		e.gpuInputBuffers = nil
+		e.gpuInputTensors = nil
+	})
 }
 
 // Execute runs the executable with the provided inputs.
 func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
+	if e == nil {
+		return nil, errors.New("Execute: executable is nil")
+	}
+	if e.backendLifecycle != nil {
+		if !e.backendLifecycle.Enter() {
+			return nil, errors.Wrap(compute.ErrBackendFinalized, "onnxruntime-web: Executable.Execute")
+		}
+		defer e.backendLifecycle.Leave()
+	} else if e.backend != nil && e.backend.IsFinalized() {
+		return nil, errors.Wrap(compute.ErrBackendFinalized, "onnxruntime-web: Executable.Execute")
+	}
+	if !e.execLifecycle.Enter() {
+		return nil, errors.New("cannot execute finalized executable")
+	}
+	defer e.execLifecycle.Leave()
 	if e.session == nil {
 		return nil, errors.New("cannot execute finalized executable")
 	}
@@ -240,7 +274,7 @@ func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevi
 		}
 
 		wrapper := NewWebTensorWrapper(outTensor, actualShape)
-		outBuffers[i] = NewBuffer(e.backend, wrapper, actualShape, defaultDevice, false, e)
+		outBuffers[i] = NewBuffer(e.backend, e.backendLifecycle, wrapper, actualShape, defaultDevice, false, e)
 	}
 
 	// Donate inputs if requested

@@ -393,6 +393,10 @@ func New(config string) (compute.Backend, error) {
 
 func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape, modelProto *onnx.ModelProto) (compute.Executable, error) {
+	if !b.lifecycle.Enter() {
+		return nil, errors.Wrapf(compute.ErrBackendFinalized, "backend %q: createExecutable", BackendName)
+	}
+	defer b.lifecycle.Leave()
 
 	var migraphxOpts *native.MIGraphXOptions
 	if b.executionProvider == executionprovider.MIGraphX && b.migraphxCacheDir != "" {
@@ -406,15 +410,22 @@ func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, input
 	if b.keepModelProto {
 		savedModelProto = modelProto
 	}
-	return native.NewExecutable(b, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto, b.executionProvider, modelBytes, b.logSeverity, migraphxOpts, b.sessionConfig), nil
+	exec := native.NewExecutable(b, &b.lifecycle, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto, b.executionProvider, modelBytes, b.logSeverity, migraphxOpts, b.sessionConfig)
+	handle := b.execTracker.Track(exec)
+	exec.SetUntrack(handle.Untrack)
+	return exec, nil
 }
 
 func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shape shapes.Shape) (compute.Buffer, error) {
+	if !b.lifecycle.Enter() {
+		return nil, errors.Wrapf(compute.ErrBackendFinalized, "backend %q: BufferFromFlatData", BackendName)
+	}
+	defer b.lifecycle.Leave()
 	wrapper, err := native.NewOrtTensorWrapper(shape, flat)
 	if err != nil {
 		return nil, err
 	}
-	return native.NewBuffer(b, wrapper, shape, deviceNum, b.executionProvider, nil), nil
+	return native.NewBuffer(b, &b.lifecycle, wrapper, shape, deviceNum, b.executionProvider, nil), nil
 }
 
 func (b *Backend) HasSharedBuffers() bool {
@@ -422,11 +433,15 @@ func (b *Backend) HasSharedBuffers() bool {
 }
 
 func (b *Backend) NewSharedBuffer(deviceNum compute.DeviceNum, shape shapes.Shape) (compute.Buffer, any, error) {
+	if !b.lifecycle.Enter() {
+		return nil, nil, errors.Wrapf(compute.ErrBackendFinalized, "backend %q: NewSharedBuffer", BackendName)
+	}
+	defer b.lifecycle.Leave()
 	wrapper, err := native.NewEmptyOrtTensorWrapper(shape)
 	if err != nil {
 		return nil, nil, err
 	}
 	flat := wrapper.GetData()
-	buf := native.NewBuffer(b, wrapper, shape, deviceNum, b.executionProvider, nil)
+	buf := native.NewBuffer(b, &b.lifecycle, wrapper, shape, deviceNum, b.executionProvider, nil)
 	return buf, flat, nil
 }

@@ -1,4 +1,10 @@
 # Changelog
+- 2026-11-20:
+  - Implemented safe concurrent backend finalization and weak `Executable` tracking (`backend.go`, `backend_native.go`, `backend_wasm.go`, `internal/engine/{native,web}/{executable,buffer}.go`):
+    - Added `xsync.Lifecycle` on `Backend` and `Executable` so `Backend.Finalize()` waits for in-flight executions/compilations/transfers and subsequent calls on derived `Builder`, `Executable`, and `Buffer` objects return `compute.ErrBackendFinalized`.
+    - Added `xsync.WeakTracker[Executable]` on `Backend` so `Backend.Finalize()` immediately destroys all live ONNX Runtime sessions and GPU weights instead of waiting for GC.
+    - Added `TestFinalize` invoking `backendtest.TestFinalize` (`backend_test.go`).
+
 - 2026-11-18:
   - Implemented `Expm1` by lowering it to `Exp(x) - 1` (ONNX native `Expm1` requires Opset 29; backend targets Opset 21), and implemented `IsFinite` using ONNX `IsInf` and `IsNaN` (`!(IsInf(x) || IsNaN(x))`); registered both operations for ONNX Runtime backend capability checks (`internal/graph/ops.go`, `internal/graph/ops_unary.go`).
   - Documented ONNX Opset 21 targeting and future Opset 29 roadmap (`Expm1`, `Log1p`) in `docs/Opsets.md` and `README.md`, and updated `github.com/gomlx/compute` dependency.

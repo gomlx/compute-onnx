@@ -14,6 +14,7 @@ import (
 	"github.com/gomlx/compute/dtypes/bfloat16"
 	"github.com/gomlx/compute/dtypes/float16"
 	"github.com/gomlx/compute/shapes"
+	"github.com/gomlx/compute/support/xsync"
 	"github.com/pkg/errors"
 )
 
@@ -492,6 +493,7 @@ func (g *GpuTensorWrapper) GetData() any {
 // Buffer implements compute.Buffer for ONNX Runtime native execution.
 type Buffer struct {
 	backend           compute.Backend
+	backendLifecycle  *xsync.Lifecycle
 	wrapper           OrtTensorWrapper
 	shape             shapes.Shape
 	device            compute.DeviceNum
@@ -502,16 +504,30 @@ type Buffer struct {
 var _ compute.Buffer = (*Buffer)(nil)
 
 // NewBuffer creates a new Buffer.
-func NewBuffer(backend compute.Backend, wrapper OrtTensorWrapper, shape shapes.Shape, device compute.DeviceNum, executionProvider executionprovider.Type, exec *Executable) *Buffer {
+func NewBuffer(backend compute.Backend, backendLifecycle *xsync.Lifecycle, wrapper OrtTensorWrapper, shape shapes.Shape, device compute.DeviceNum, executionProvider executionprovider.Type, exec *Executable) *Buffer {
 	shape.AxisNames = nil
 	return &Buffer{
 		backend:           backend,
+		backendLifecycle:  backendLifecycle,
 		wrapper:           wrapper,
 		shape:             shape,
 		device:            device,
 		executionProvider: executionProvider,
 		executable:        exec,
 	}
+}
+
+func (b *Buffer) enterBackend(op string) (bool, error) {
+	if b.backendLifecycle != nil {
+		if !b.backendLifecycle.Enter() {
+			return false, errors.Wrapf(compute.ErrBackendFinalized, "onnxruntime: Buffer.%s", op)
+		}
+		return true, nil
+	}
+	if b.backend != nil && b.backend.IsFinalized() {
+		return false, errors.Wrapf(compute.ErrBackendFinalized, "onnxruntime: Buffer.%s", op)
+	}
+	return false, nil
 }
 
 func (b *Buffer) Backend() compute.Backend {
@@ -524,6 +540,9 @@ func (b *Buffer) IsShared() bool {
 }
 
 func (b *Buffer) Finalize() error {
+	if b == nil {
+		return nil
+	}
 	if b.wrapper != nil {
 		w := b.wrapper
 		b.wrapper = nil
@@ -539,14 +558,33 @@ func (b *Buffer) Finalize() error {
 }
 
 func (b *Buffer) Shape() (shapes.Shape, error) {
+	if b == nil || b.wrapper == nil {
+		return shapes.Invalid(), errors.New("cannot query shape of finalized buffer")
+	}
+	if b.backend != nil && b.backend.IsFinalized() {
+		return shapes.Invalid(), errors.Wrap(compute.ErrBackendFinalized, "onnxruntime: Buffer.Shape")
+	}
 	return b.shape, nil
 }
 
 func (b *Buffer) DeviceNum() (compute.DeviceNum, error) {
+	if b == nil || b.wrapper == nil {
+		return 0, errors.New("cannot query device of finalized buffer")
+	}
+	if b.backend != nil && b.backend.IsFinalized() {
+		return 0, errors.Wrap(compute.ErrBackendFinalized, "onnxruntime: Buffer.DeviceNum")
+	}
 	return b.device, nil
 }
 
 func (b *Buffer) ToFlatData(flat any) error {
+	entered, err := b.enterBackend("ToFlatData")
+	if err != nil {
+		return err
+	}
+	if entered {
+		defer b.backendLifecycle.Leave()
+	}
 	if b.wrapper == nil {
 		return errors.New("cannot read from finalized buffer")
 	}
@@ -557,6 +595,13 @@ func (b *Buffer) Data() (flat any, err error) {
 	if !b.IsShared() {
 		return nil, errors.New("direct data access not supported for GPU buffers; use ToFlatData")
 	}
+	entered, err := b.enterBackend("Data")
+	if err != nil {
+		return nil, err
+	}
+	if entered {
+		defer b.backendLifecycle.Leave()
+	}
 	if b.wrapper == nil {
 		return nil, errors.New("cannot read from finalized buffer")
 	}
@@ -564,6 +609,13 @@ func (b *Buffer) Data() (flat any, err error) {
 }
 
 func (b *Buffer) CopyToDevice(deviceNum compute.DeviceNum) (compute.Buffer, error) {
+	entered, err := b.enterBackend("CopyToDevice")
+	if err != nil {
+		return nil, err
+	}
+	if entered {
+		defer b.backendLifecycle.Leave()
+	}
 	if b.wrapper == nil {
 		return nil, errors.New("cannot copy finalized buffer")
 	}
@@ -584,6 +636,7 @@ func (b *Buffer) CopyToDevice(deviceNum compute.DeviceNum) (compute.Buffer, erro
 	}
 	return &Buffer{
 		backend:           b.backend,
+		backendLifecycle:  b.backendLifecycle,
 		wrapper:           newWrapper,
 		shape:             b.shape,
 		device:            deviceNum,

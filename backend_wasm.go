@@ -158,6 +158,10 @@ func New(config string) (compute.Backend, error) {
 
 func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape, modelProto *onnx.ModelProto) (compute.Executable, error) {
+	if !b.lifecycle.Enter() {
+		return nil, errors.Wrapf(compute.ErrBackendFinalized, "backend %q: createExecutable", BackendName)
+	}
+	defer b.lifecycle.Leave()
 
 	session, err := web.CreateSession(modelBytes, b.executionProvider, b.logSeverity, b.enableGraphCapture, b.webVersion)
 	if err != nil {
@@ -167,10 +171,17 @@ func (b *Backend) createExecutable(modelBytes []byte, inputNames []string, input
 	if b.keepModelProto {
 		savedModelProto = modelProto
 	}
-	return web.NewExecutable(b, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto), nil
+	exec := web.NewExecutable(b, &b.lifecycle, session, inputNames, inputShapes, outputNames, outputShapes, savedModelProto)
+	handle := b.execTracker.Track(exec)
+	exec.SetUntrack(handle.Untrack)
+	return exec, nil
 }
 
 func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shape shapes.Shape) (compute.Buffer, error) {
+	if !b.lifecycle.Enter() {
+		return nil, errors.Wrapf(compute.ErrBackendFinalized, "backend %q: BufferFromFlatData", BackendName)
+	}
+	defer b.lifecycle.Leave()
 	typedArray, err := web.ConvertSliceToTypedArray(flat, shape.DType)
 	if err != nil {
 		return nil, err
@@ -180,7 +191,7 @@ func (b *Backend) BufferFromFlatData(deviceNum compute.DeviceNum, flat any, shap
 		return nil, err
 	}
 	wrapper := web.NewWebTensorWrapper(jsTensor, shape)
-	return web.NewBuffer(b, wrapper, shape, deviceNum, false, nil), nil
+	return web.NewBuffer(b, &b.lifecycle, wrapper, shape, deviceNum, false, nil), nil
 }
 
 func (b *Backend) HasSharedBuffers() bool {
@@ -188,5 +199,8 @@ func (b *Backend) HasSharedBuffers() bool {
 }
 
 func (b *Backend) NewSharedBuffer(deviceNum compute.DeviceNum, shape shapes.Shape) (compute.Buffer, any, error) {
+	if b.IsFinalized() {
+		return nil, nil, errors.Wrapf(compute.ErrBackendFinalized, "backend %q: NewSharedBuffer", BackendName)
+	}
 	return nil, nil, errors.New("shared buffers are not supported in web/wasm backend")
 }
