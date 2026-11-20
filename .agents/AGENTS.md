@@ -143,7 +143,7 @@ github.com/gomlx/compute-onnx/
 
 ### 4. Concurrency & Thread Locking
 - **OS Thread Locking**: `session.Run()` calls `runtime.LockOSThread()` / `UnlockOSThread()` to prevent the Go runtime scheduler from migrating goroutines between OS threads during low-level CGO runtime execution.
-- **Wrapper Recycling Mutex**: Executable wrapper recycling and buffer finalization are guarded by `mu sync.Mutex`, allowing safe concurrent finalization from Go garbage collection finalizers.
+- **Wrapper Recycling Mutex & Backend Lifecycle**: Executable wrapper recycling and buffer finalization are guarded by `mu sync.Mutex`, allowing safe concurrent finalization from Go garbage collection finalizers. `Backend` uses `xsync.Lifecycle` (coordinating in-flight operations against `Backend.Finalize()`, returning `compute.ErrBackendFinalized` after teardown) and `xsync.WeakTracker[Executable]` so `Backend.Finalize()` immediately destroys all live ONNX Runtime sessions (`native` and `web`) instead of waiting for GC.
 
 ### 5. Dynamic Shapes & Data-Dependent Axis Naming
 - **Unique Generated Axis Names**: Non-user-named, data-dependent, and derived dynamic dimensions use `shapes.UniqueAxisName(prefix)` (`#<prefix>_<n>`, detected via `shapes.IsGeneratedAxisName`), minted directly by `shapeinference` (`#nonzeros_<n>`, `#conv_<n>`, `#pad_<n>`, `#concat_<n>`) or ONNX lowering (`#dot_<n>`, `#gather_<n>`, `#onnx_<n>`), so downstream operations share consistent axis identities.

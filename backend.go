@@ -14,6 +14,7 @@ import (
 	onnx "github.com/gomlx/compute-onnx/support/protos"
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
+	"github.com/gomlx/compute/support/xsync"
 	"github.com/pkg/errors"
 )
 
@@ -51,8 +52,10 @@ type Backend struct {
 	hasFloat64         bool
 	hasFloat16         bool
 	hasBFloat16        bool
-	isFinalized        bool
 	keepModelProto     bool
+
+	lifecycle   xsync.Lifecycle
+	execTracker xsync.WeakTracker[Executable]
 }
 
 // SessionConfig returns the session options configured for this backend.
@@ -222,15 +225,28 @@ func (b *Backend) Capabilities() compute.Capabilities {
 }
 
 func (b *Backend) Finalize() {
-	b.isFinalized = true
+	if b == nil {
+		return
+	}
+	b.lifecycle.Finalize(func() {
+		for _, exec := range b.execTracker.Drain() {
+			exec.Finalize()
+		}
+	})
 }
 
 func (b *Backend) IsFinalized() bool {
-	return b.isFinalized
+	if b == nil {
+		return true
+	}
+	return b.lifecycle.IsFinalized()
 }
 
 func (b *Backend) Builder(name string) compute.Builder {
 	gb := graph.NewBuilder(name, func(gb *graph.Builder) (compute.Executable, error) {
+		if b.IsFinalized() {
+			return nil, errors.Wrapf(compute.ErrBackendFinalized, "backend %q: Builder.Compile(%q)", BackendName, name)
+		}
 		compiled, err := graph.CompileToProto(gb)
 		if err != nil {
 			return nil, err

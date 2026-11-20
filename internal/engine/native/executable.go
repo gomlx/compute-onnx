@@ -22,6 +22,7 @@ import (
 	"github.com/gomlx/compute/dtypes"
 	"github.com/gomlx/compute/shapes"
 	"github.com/gomlx/compute/support/humanize"
+	"github.com/gomlx/compute/support/xsync"
 	"github.com/pkg/errors"
 	"k8s.io/klog/v2"
 )
@@ -41,6 +42,9 @@ type sessionClone struct {
 // Executable implements [compute.Executable] for ONNX Runtime native execution (CPU & CUDA).
 type Executable struct {
 	backend           compute.Backend
+	backendLifecycle  *xsync.Lifecycle
+	execLifecycle     xsync.Lifecycle
+	untrack           func()
 	inputNames        []string
 	inputShapes       []shapes.Shape
 	outputNames       []string
@@ -76,7 +80,7 @@ var _ compute.Executable = (*Executable)(nil)
 
 // NewExecutable creates a new Native Executable.
 // The executionProvider is inherited from the Backend's session: CUDA, MIGraphX, or CPU only.
-func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
+func NewExecutable(backend compute.Backend, backendLifecycle *xsync.Lifecycle, session *ort.DynamicAdvancedSession,
 	inputNames []string, inputShapes []shapes.Shape,
 	outputNames []string, outputShapes []shapes.Shape,
 	modelProto *onnx.ModelProto, executionProvider executionprovider.Type,
@@ -93,6 +97,7 @@ func NewExecutable(backend compute.Backend, session *ort.DynamicAdvancedSession,
 
 	e := &Executable{
 		backend:           backend,
+		backendLifecycle:  backendLifecycle,
 		inputNames:        inputNames,
 		inputShapes:       inputShapes,
 		outputNames:       outputNames,
@@ -138,31 +143,47 @@ func (e *Executable) ModelProto() *onnx.ModelProto {
 	return e.modelProto
 }
 
-func (e *Executable) Finalize() {
+// SetUntrack registers a callback invoked on Finalize to remove this Executable from the parent Backend's tracker.
+func (e *Executable) SetUntrack(fn func()) {
 	e.cloneMu.Lock()
-	if e.finalized {
-		e.cloneMu.Unlock()
+	e.untrack = fn
+	e.cloneMu.Unlock()
+}
+
+func (e *Executable) Finalize() {
+	if e == nil {
 		return
 	}
-	e.finalized = true
-	close(e.clonesChan)
-	for _, clone := range e.allClones {
-		if clone != nil && clone.session != nil {
-			_ = clone.session.Destroy()
-			clone.session = nil
+	e.execLifecycle.Finalize(func() {
+		e.cloneMu.Lock()
+		untrack := e.untrack
+		e.untrack = nil
+		if !e.finalized {
+			e.finalized = true
+			close(e.clonesChan)
+			for _, clone := range e.allClones {
+				if clone != nil && clone.session != nil {
+					_ = clone.session.Destroy()
+					clone.session = nil
+				}
+			}
+			e.allClones = nil
 		}
-	}
-	e.allClones = nil
-	e.cloneMu.Unlock()
+		e.cloneMu.Unlock()
 
-	e.mu.Lock()
-	for _, w := range e.reusableWrappers {
-		if w != nil {
-			_ = w.Destroy()
+		if untrack != nil {
+			untrack()
 		}
-	}
-	e.reusableWrappers = nil
-	e.mu.Unlock()
+
+		e.mu.Lock()
+		for _, w := range e.reusableWrappers {
+			if w != nil {
+				_ = w.Destroy()
+			}
+		}
+		e.reusableWrappers = nil
+		e.mu.Unlock()
+	})
 }
 
 func (e *Executable) Inputs() (names []string, inputShapes []shapes.Shape) {
@@ -301,6 +322,22 @@ func (e *Executable) releaseClone(clone *sessionClone) {
 }
 
 func (e *Executable) Execute(inputs []compute.Buffer, donate []bool, defaultDevice compute.DeviceNum) ([]compute.Buffer, error) {
+	if e == nil {
+		return nil, errors.New("Execute: executable is nil")
+	}
+	if e.backendLifecycle != nil {
+		if !e.backendLifecycle.Enter() {
+			return nil, errors.Wrap(compute.ErrBackendFinalized, "onnxruntime: Executable.Execute")
+		}
+		defer e.backendLifecycle.Leave()
+	} else if e.backend != nil && e.backend.IsFinalized() {
+		return nil, errors.Wrap(compute.ErrBackendFinalized, "onnxruntime: Executable.Execute")
+	}
+	if !e.execLifecycle.Enter() {
+		return nil, errors.New("cannot execute finalized executable")
+	}
+	defer e.execLifecycle.Leave()
+
 	clone, err := e.acquireClone()
 	if err != nil {
 		return nil, err
@@ -448,6 +485,7 @@ func (e *Executable) executeCUDA(clone *sessionClone, ortInputs []ort.Value, inp
 		ortShape := ort.NewShape(toInt64s(actualShape.Dimensions)...)
 		outBuffers[i] = &Buffer{
 			backend:           e.backend,
+			backendLifecycle:  e.backendLifecycle,
 			wrapper:           NewGpuTensorWrapper(val, ortShape, actualShape.DType),
 			shape:             actualShape,
 			device:            defaultDevice,
@@ -601,6 +639,7 @@ func (e *Executable) executeDefault(clone *sessionClone, inputs []compute.Buffer
 		}
 		outBuffers[i] = &Buffer{
 			backend:           e.backend,
+			backendLifecycle:  e.backendLifecycle,
 			wrapper:           outWrappers[i],
 			shape:             actualShape,
 			device:            defaultDevice,
